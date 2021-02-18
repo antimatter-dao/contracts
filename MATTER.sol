@@ -28,60 +28,113 @@ contract Offering is Configurable {
 	using SafeMath for uint;
 	using SafeERC20 for IERC20;
 	
-	bytes32 internal constant _quota_      = 'quota';
-	bytes32 internal constant _allowlist_  = 'allowlist';
-	bytes32 internal constant _isSeed_     = 'isSeed';
+	bytes32 internal constant _quota_           = 'quota';
+	bytes32 internal constant _volume_          = 'volume';
+	bytes32 internal constant _unlocked_        = 'unlocked';
+	bytes32 internal constant _ratioUnlockFirst_= 'ratioUnlockFirst';
+	bytes32 internal constant _ratio_           = 'ratio';
+	bytes32 internal constant _isSeed_          = 'isSeed';
+	bytes32 internal constant _public_          = 'public';
+	bytes32 internal constant _recipient_       = 'recipient';
+	bytes32 internal constant _time_            = 'time';
+	uint internal constant _timeOfferBegin_     = 0;
+	uint internal constant _timeOfferEnd_       = 1;
+	uint internal constant _timeUnlockFirst_    = 2;
+	uint internal constant _timeUnlockBegin_    = 3;
+	uint internal constant _timeUnlockEnd_      = 4;
 	
-	IERC20 public token;
 	IERC20 public currency;
-	uint public price;
-	address public vault;
-	uint public begin;
-	uint public span;
-	mapping (address => uint) public offeredOf;
-	
-	function __Offering_init(address governor_, address _token, address _currency, uint _price, uint _quota, address _vault, uint _begin, uint _span) external initializer {
+	IERC20 public token;
+
+	function __Offering_init(address governor_, address currency_, address token_, address public_, address recipient_, uint[5] memory times_) external initializer {
 		__Governable_init_unchained(governor_);
-		__Offering_init_unchained(_token, _currency, _price, _quota, _vault, _begin, _span);
+		__Offering_init_unchained(currency_, token_, public_, recipient_, times_);
 	}
 	
-	function __Offering_init_unchained(address _token, address _currency, uint _price, uint _quota, address _vault, uint _begin, uint _span) public governance {
-		token = IERC20(_token);
-		currency = IERC20(_currency);
-		price = _price;
-		vault = _vault;
-		begin = _begin;
-		span = _span;
-		config[_quota_] = _quota;
+	function __Offering_init_unchained(address currency_, address token_, address public_, address recipient_, uint[5] memory times_) public governance {
+		currency = IERC20(currency_);
+		token = IERC20(token_);
+		_setConfig(_ratio_, 0, 28818181818181);     // for private
+		_setConfig(_ratio_, 1, 54333333333333);     // for seed
+		_setConfig(_public_, uint(public_));
+		_setConfig(_recipient_, uint(recipient_));
+		_setConfig(_ratioUnlockFirst_, 0.25 ether); // 25%
+		for(uint i=0; i<times_.length; i++)
+		    _setConfig(_time_, i, times_[i]);
 	}
 	
-    function addAllowlist(address addr, uint amount, bool isSeed) public governance {
-        _setConfig(_allowlist_, addr, amount);
+    function setQuota(address addr, uint amount, bool isSeed) public governance {
+        _setConfig(_quota_, addr, amount);
         if(isSeed)
             _setConfig(_isSeed_, addr, 1);
+            
+        uint volume = amount.mul(getConfig(_ratio_, isSeed ? 1 : 0));
+        uint totalVolume = getConfig(_volume_, address(0)).add(volume);
+        require(totalVolume <= token.balanceOf(address(this)), 'out of quota');
+        _setConfig(_volume_, address(0), totalVolume);
     }
     
-    function addAllowlists(address[] memory addrs, uint[] memory amounts, bool isSeed) public {
+    function setQuota(address[] memory addrs, uint[] memory amounts, bool isSeed) public {
         for(uint i=0; i<addrs.length; i++)
-            addAllowlist(addrs[i], amounts[i], isSeed);
+            setQuota(addrs[i], amounts[i], isSeed);
+    }
+    
+    function getQuota(address addr) public view returns (uint) {
+        return getConfig(_quota_, addr);
     }
 
 	function offer() external {
-		require(now >= begin, 'Not begin');
-		if(now > begin.add(span))
+		require(now >= getConfig(_time_, _timeOfferBegin_), 'Not begin');
+		if(now > getConfig(_time_, _timeOfferEnd_))
 			if(token.balanceOf(address(this)) > 0)
-				token.safeTransfer(mine, token.balanceOf(address(this)));
+				token.safeTransfer(address(config[_public_]), token.balanceOf(address(this)));
 			else
 				revert('offer over');
-		require(offeredOf[msg.sender] < config[_quota_], 'out of quota');
-		vol = Math.min(Math.min(vol, config[_quota_].sub(offeredOf[msg.sender])), token.balanceOf(address(this)));
-		offeredOf[msg.sender] = offeredOf[msg.sender].add(vol);
-		uint amt = vol.mul(price).div(1e18);
-		currency.safeTransferFrom(msg.sender, address(this), amt);
-		currency.approve(vault, amt);
-		IVault(vault).receiveAEthFrom(address(this), amt);
-		token.safeTransfer(msg.sender, vol);
+		uint quota = getConfig(_quota_, msg.sender);
+		require(quota > 0, 'no quota');
+		require(currency.allowance(msg.sender, address(this)) >= quota, 'allowance not enough');
+		require(currency.balanceOf(msg.sender) >= quota, 'balance not enough');
+		require(getConfig(_volume_, msg.sender) == 0, 'offered already');
+		
+		currency.safeTransferFrom(msg.sender, address(config[_recipient_]), quota);
+		_setConfig(_volume_, msg.sender, quota.mul(getConfig(_ratio_, getConfig(_isSeed_, msg.sender))));
 	}
+	
+	function getVolume(address addr) public view returns (uint) {
+	    return getConfig(_volume_, addr);
+	}
+	
+    function unlockCapacity(address addr) public view returns (uint c) {
+        uint timeUnlockFirst    = getConfig(_time_, _timeUnlockFirst_);
+        if(timeUnlockFirst == 0 || now < timeUnlockFirst)
+            return 0;
+        uint timeUnlockBegin    = getConfig(_time_, _timeUnlockBegin_);
+        uint timeUnlockEnd      = getConfig(_time_, _timeUnlockEnd_);
+        uint volume             = getConfig(_volume_, addr);
+        uint ratioUnlockFirst   = getConfig(_ratioUnlockFirst_);
+
+        c = volume.mul(ratioUnlockFirst).div(1e18);
+        if(now >= timeUnlockEnd)
+            c = volume;
+        else if(now > timeUnlockBegin)
+            c = volume.sub(c).mul(now.sub(timeUnlockBegin)).div(timeUnlockEnd.sub(timeUnlockBegin)).add(c);
+        return c.sub(getConfig(_unlocked_, addr));
+    }
+    
+    function unlock() public {
+        uint c = unlockCapacity(msg.sender);
+        _setConfig(_unlocked_, msg.sender, getConfig(_unlocked_, msg.sender).add(c));
+        _setConfig(_unlocked_, address(0), getConfig(_unlocked_, address(0)).add(c));
+        token.safeTransfer(msg.sender, c);
+    }
+    
+    function unlocked(address addr) public view returns (uint) {
+        return getConfig(_unlocked_, addr);
+    }
+    
+    fallback() external {
+        unlock();
+    }
 }
 
 contract Timelock is Configurable {
