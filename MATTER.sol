@@ -4,26 +4,6 @@ pragma solidity ^0.6.0;
 
 import "./Include.sol";
 
-contract MATTER is ERC20UpgradeSafe, Configurable {
-	function __MATTER_init(address governor_, address offering_, address public_, address team_, address fund_, address mine_, address liquidity_) external initializer {
-        __Context_init_unchained();
-		__ERC20_init_unchained("Antimatter.Finance Governance Token", "MATTER");
-		__Governable_init_unchained(governor_);
-		__MATTER_init_unchained(offering_, public_, team_, fund_, mine_, liquidity_);
-	}
-	
-	function __MATTER_init_unchained(address offering_, address public_, address team_, address fund_, address mine_, address liquidity_) public governance {
-		_mint(offering_,    24_000_000 * 10 ** uint256(decimals()));
-		_mint(public_,       1_000_000 * 10 ** uint256(decimals()));
-		_mint(team_,        10_000_000 * 10 ** uint256(decimals()));
-		_mint(fund_,        10_000_000 * 10 ** uint256(decimals()));
-		_mint(mine_,        50_000_000 * 10 ** uint256(decimals()));
-		_mint(liquidity_,    5_000_000 * 10 ** uint256(decimals()));
-	}
-	
-}
-
-
 contract Offering is Configurable {
 	using SafeMath for uint;
 	using SafeERC20 for IERC20;
@@ -64,17 +44,19 @@ contract Offering is Configurable {
 	}
 	
     function setQuota(address addr, uint amount, bool isSeed) public governance {
+        uint oldVol = getConfig(_quota_, addr).mul(getConfig(_ratio_, getConfig(_isSeed_, addr)));
+        
         _setConfig(_quota_, addr, amount);
         if(isSeed)
             _setConfig(_isSeed_, addr, 1);
             
         uint volume = amount.mul(getConfig(_ratio_, isSeed ? 1 : 0));
-        uint totalVolume = getConfig(_volume_, address(0)).add(volume);
+        uint totalVolume = getConfig(_volume_, address(0)).add(volume).sub(oldVol);
         require(totalVolume <= token.balanceOf(address(this)), 'out of quota');
         _setConfig(_volume_, address(0), totalVolume);
     }
     
-    function setQuota(address[] memory addrs, uint[] memory amounts, bool isSeed) public {
+    function setQuotas(address[] memory addrs, uint[] memory amounts, bool isSeed) public {
         for(uint i=0; i<addrs.length; i++)
             setQuota(addrs[i], amounts[i], isSeed);
     }
@@ -85,7 +67,7 @@ contract Offering is Configurable {
 
 	function offer() external {
 		require(now >= getConfig(_time_, _timeOfferBegin_), 'Not begin');
-		if(now > getConfig(_time_, _timeOfferEnd_))
+		if(now > getConfig(_time_, _timeOfferEnd_))                                                 // todo timeOfferEnd should be -1
 			if(token.balanceOf(address(this)) > 0)
 				token.safeTransfer(address(config[_public_]), token.balanceOf(address(this)));
 			else
@@ -137,6 +119,7 @@ contract Offering is Configurable {
     }
 }
 
+
 contract Timelock is Configurable {
 	using SafeMath for uint;
 	using SafeERC20 for IERC20;
@@ -176,4 +159,286 @@ contract Timelock is Configurable {
     fallback() external {
         unlock();
     }
+}
+
+
+contract AuthQuota is Configurable {
+	using SafeMath for uint;
+
+    bytes32 internal constant _authQuota_       = 'authQuota';
+    
+    function authQuotaOf(address signatory) virtual public view returns (uint) {
+        return getConfig(_authQuota_, signatory);
+    }
+    
+    function increaseAuthQuota(address signatory, uint increment) virtual external governance returns (uint quota) {
+        quota = getConfig(_authQuota_, signatory).add(increment);
+        _setConfig(_authQuota_, signatory, quota);
+        emit IncreaseAuthQuota(signatory, increment, quota);
+    }
+    event IncreaseAuthQuota(address indexed signatory, uint increment, uint quota);
+    
+    function decreaseAuthQuota(address signatory, uint decrement) virtual external governance returns (uint quota) {
+        quota = getConfig(_authQuota_, signatory);
+        if(quota < decrement)
+            decrement = quota;
+        return _decreaseAuthQuota(signatory, decrement);
+    }
+    
+    function _decreaseAuthQuota(address signatory, uint decrement) virtual internal returns (uint quota) {
+        quota = getConfig(_authQuota_, signatory).sub(decrement);
+        _setConfig(_authQuota_, signatory, quota);
+        emit DecreaseAuthQuota(signatory, decrement, quota);
+    }
+    event DecreaseAuthQuota(address indexed signatory, uint decrement, uint quota);
+}    
+    
+    
+contract TokenMapped is ContextUpgradeSafe, AuthQuota {
+    using SafeERC20 for IERC20;
+    
+    bytes32 public constant REDEEM_TYPEHASH = keccak256("Redeem(address authorizer,address to,uint256 volume,uint256 chainId,uint256 txHash)");
+    bytes32 public constant DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,uint256 chainId,address verifyingContract)");
+    bytes32 public DOMAIN_SEPARATOR;
+    mapping (uint => bool) public redeemed;
+    
+    address public token;
+    
+	function __TokenMapped_init(address governor_, address token_) external initializer {
+        __Context_init_unchained();
+		__Governable_init_unchained(governor_);
+		__TokenMapped_init_unchained(token_);
+	}
+	
+	function __TokenMapped_init_unchained(address token_) public governance {
+        token = token_;
+        
+        uint256 chainId;
+        assembly { chainId := chainid() }
+        DOMAIN_SEPARATOR = keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256(bytes(ERC20UpgradeSafe(token).name())), chainId, address(this)));
+	}
+	
+    function totalMapped() virtual public view returns (uint) {
+        return IERC20(token).balanceOf(address(this));
+    }
+    
+    function stake(uint volume, uint chainId, address to) virtual external {
+        IERC20(token).safeTransferFrom(_msgSender(), address(this), volume);
+        emit Stake(_msgSender(), volume, chainId, to);
+    }
+    event Stake(address indexed from, uint volume, uint indexed chainId, address indexed to);
+    
+    function _redeem(address authorizer, address to, uint volume, uint chainId, uint txHash) virtual internal {
+        require(!redeemed[chainId ^ txHash], 'redeemed already');
+        redeemed[chainId ^ txHash] = true;
+        _decreaseAuthQuota(authorizer, volume);
+        IERC20(token).safeTransfer(to, volume);
+        emit Redeem(authorizer, to, volume, chainId, txHash);
+    }
+    event Redeem(address indexed signatory, address indexed to, uint volume, uint chainId, uint indexed txHash);
+    
+    function redeem(address to, uint volume, uint chainId, uint txHash) virtual external {
+        _redeem(_msgSender(), to, volume, chainId, txHash);
+    }
+    
+    function redeem(address authorizer, address to, uint256 volume, uint256 chainId, uint256 txHash, uint8 v, bytes32 r, bytes32 s) external virtual {
+        bytes32 structHash = keccak256(abi.encode(REDEEM_TYPEHASH, authorizer, to, volume, chainId, txHash));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
+        address signatory = ecrecover(digest, v, r, s);
+        require(signatory != address(0), "invalid signature");
+        require(signatory == authorizer, "unauthorized");
+
+        _redeem(authorizer, to, volume, chainId, txHash);
+    }
+
+    uint256[50] private __gap;
+}
+
+
+interface IPermit {
+    function permit(address owner, address spender, uint value, uint deadline, uint8 v, bytes32 r, bytes32 s) external;
+}
+
+
+contract MappableToken is ERC20UpgradeSafe, AuthQuota, IPermit {
+    // keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
+    bytes32 public constant PERMIT_TYPEHASH = 0x6e71edae12b1b97f4d1f60370fef10105fa2faae0126114a169c64845d6126c9;
+    bytes32 public constant REDEEM_TYPEHASH = keccak256("Redeem(address authorizer,address to,uint256 volume,uint256 chainId,uint256 txHash)");
+    bytes32 public constant DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,uint256 chainId,address verifyingContract)");
+    bytes32 public DOMAIN_SEPARATOR;
+    mapping (address => uint) public nonces;
+    mapping (uint => bool) public redeemed;
+    
+    address public token;
+
+	function __MappableToken_init(address governor_, string memory name_, string memory symbol_, uint8 decimals_) external initializer {
+        __Context_init_unchained();
+		__ERC20_init_unchained(name_, symbol_);
+		_setupDecimals(decimals_);
+		__Governable_init_unchained(governor_);
+		__MappableToken_init_unchained();
+	}
+	
+	function __MappableToken_init_unchained() public governance {
+        token = address(this);
+        
+        uint256 chainId;
+        assembly { chainId := chainid() }
+        DOMAIN_SEPARATOR = keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256(bytes(name())), chainId, address(this)));
+	}
+	
+    function totalMapped() virtual public view returns (uint) {
+        return balanceOf(address(this));
+    }
+    
+    function stake(uint volume, uint chainId, address to) virtual external {
+        _transfer(_msgSender(), address(this), volume);
+        emit Stake(_msgSender(), volume, chainId, to);
+    }
+    event Stake(address indexed from, uint volume, uint indexed chainId, address indexed to);
+    
+    function _redeem(address authorizer, address to, uint volume, uint chainId, uint txHash) virtual internal {
+        require(!redeemed[chainId ^ txHash], 'redeemed already');
+        redeemed[chainId ^ txHash] = true;
+        _decreaseAuthQuota(authorizer, volume);
+        _transfer(address(this), to, volume);
+        emit Redeem(authorizer, to, volume, chainId, txHash);
+    }
+    event Redeem(address indexed signatory, address indexed to, uint volume, uint chainId, uint indexed txHash);
+    
+    function redeem(address to, uint volume, uint chainId, uint txHash) virtual external {
+        _redeem(_msgSender(), to, volume, chainId, txHash);
+    }
+    
+    function redeem(address authorizer, address to, uint256 volume, uint256 chainId, uint256 txHash, uint8 v, bytes32 r, bytes32 s) external virtual {
+        bytes32 structHash = keccak256(abi.encode(REDEEM_TYPEHASH, authorizer, to, volume, chainId, txHash));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
+        address signatory = ecrecover(digest, v, r, s);
+        require(signatory != address(0), "invalid signature");
+        require(signatory == authorizer, "unauthorized");
+
+        _redeem(authorizer, to, volume, chainId, txHash);
+    }
+
+    function permit(address owner, address spender, uint value, uint deadline, uint8 v, bytes32 r, bytes32 s) override external {
+        require(deadline >= block.timestamp, 'permit EXPIRED');
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                '\x19\x01',
+                DOMAIN_SEPARATOR,
+                keccak256(abi.encode(PERMIT_TYPEHASH, owner, spender, value, nonces[owner]++, deadline))
+            )
+        );
+        address recoveredAddress = ecrecover(digest, v, r, s);
+        require(recoveredAddress != address(0) && recoveredAddress == owner, 'permit INVALID_SIGNATURE');
+        _approve(owner, spender, value);
+    }
+    
+    uint256[50] private __gap;
+}
+
+
+contract MappingToken is ERC20CappedUpgradeSafe, AuthQuota, IPermit {
+    bytes32 public constant MINT_TYPEHASH = keccak256("Mint(address authorizer,address to,uint256 volume,uint256 chainId,uint256 txHash)");
+    bytes32 public constant DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,uint256 chainId,address verifyingContract)");
+    bytes32 public DOMAIN_SEPARATOR;
+    mapping (address => uint) public nonces;
+    mapping (uint => bool) public minted;
+
+	function __MappingToken_init(address governor_, uint cap_, string memory name_, string memory symbol_) external initializer {
+        __Context_init_unchained();
+		__ERC20_init_unchained(name_, symbol_);
+		__ERC20Capped_init_unchained(cap_);
+		__Governable_init_unchained(governor_);
+		__MappingToken_init_unchained();
+	}
+	
+	function __MappingToken_init_unchained() public governance {
+        uint256 chainId;
+        assembly { chainId := chainid() }
+        DOMAIN_SEPARATOR = keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256(bytes(name())), chainId, address(this)));
+	}
+	
+    function _mint(address authorizer, address to, uint volume, uint chainId, uint txHash) virtual internal {
+        require(!minted[chainId ^ txHash], 'minted already');
+        minted[chainId ^ txHash] = true;
+        _decreaseAuthQuota(authorizer, volume);
+        _mint(to, volume);
+        emit Mint(authorizer, to, volume, chainId, txHash);
+    }
+    event Mint(address indexed signatory, address indexed to, uint volume, uint chainId, uint indexed txHash);
+    
+    function mint(address to, uint volume, uint chainId, uint txHash) virtual external {
+        _mint(_msgSender(), to, volume, chainId, txHash);
+    }
+    
+    function mint(address authorizer, address to, uint256 volume, uint256 chainId, uint256 txHash, uint8 v, bytes32 r, bytes32 s) external virtual {
+        bytes32 structHash = keccak256(abi.encode(MINT_TYPEHASH, authorizer, to, volume, chainId, txHash));
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
+        address signatory = ecrecover(digest, v, r, s);
+        require(signatory != address(0), "invalid signature");
+        require(signatory == authorizer, "unauthorized");
+
+        _mint(authorizer, to, volume, chainId, txHash);
+    }
+
+    function burn(uint volume, uint chainId, address to) virtual external {
+        _burn(_msgSender(), volume);
+        emit Burn(_msgSender(), volume, chainId, to);
+    }
+    event Burn(address indexed from, uint volume, uint indexed chainId, address indexed to);
+    
+    // keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
+    bytes32 public constant PERMIT_TYPEHASH = 0x6e71edae12b1b97f4d1f60370fef10105fa2faae0126114a169c64845d6126c9;
+
+    function permit(address owner, address spender, uint value, uint deadline, uint8 v, bytes32 r, bytes32 s) override external {
+        require(deadline >= block.timestamp, 'permit EXPIRED');
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                '\x19\x01',
+                DOMAIN_SEPARATOR,
+                keccak256(abi.encode(PERMIT_TYPEHASH, owner, spender, value, nonces[owner]++, deadline))
+            )
+        );
+        address recoveredAddress = ecrecover(digest, v, r, s);
+        require(recoveredAddress != address(0) && recoveredAddress == owner, 'permit INVALID_SIGNATURE');
+        _approve(owner, spender, value);
+    }
+
+    uint256[50] private __gap;
+}
+
+
+contract MappingMATTER is MappingToken {
+	function __MappingMATTER_init(address governor_, uint cap_) external initializer {
+        __Context_init_unchained();
+		__ERC20_init_unchained("Antimatter.Finance Mapping Token", "MATTER");
+		__ERC20Capped_init_unchained(cap_);
+		__Governable_init_unchained(governor_);
+		__MappingToken_init_unchained();
+		__MappingMATTER_init_unchained();
+	}
+	
+	function __MappingMATTER_init_unchained() public governance {
+	}
+}	
+
+
+contract MATTER is MappableToken {
+	function __MATTER_init(address governor_, address offering_, address public_, address team_, address fund_, address mine_, address liquidity_) external initializer {
+        __Context_init_unchained();
+		__ERC20_init_unchained("Antimatter.Finance Governance Token", "MATTER");
+		__Governable_init_unchained(governor_);
+		__MappableToken_init_unchained();
+		__MATTER_init_unchained(offering_, public_, team_, fund_, mine_, liquidity_);
+	}
+	
+	function __MATTER_init_unchained(address offering_, address public_, address team_, address fund_, address mine_, address liquidity_) public initializer {
+		_mint(offering_,    24_000_000 * 10 ** uint256(decimals()));
+		_mint(public_,       1_000_000 * 10 ** uint256(decimals()));
+		_mint(team_,        10_000_000 * 10 ** uint256(decimals()));
+		_mint(fund_,        10_000_000 * 10 ** uint256(decimals()));
+		_mint(mine_,        50_000_000 * 10 ** uint256(decimals()));
+		_mint(liquidity_,    5_000_000 * 10 ** uint256(decimals()));
+	}
 }
