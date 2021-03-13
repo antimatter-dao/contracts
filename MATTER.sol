@@ -1158,7 +1158,7 @@ contract TokenMapped is ContextUpgradeSafe, AuthQuota {
 	
 	function __TokenMapped_init_unchained(address token_) public governance {
         token = token_;
-        config[_minSignatures_] = 1;
+        config[_minSignatures_] = 3;
         
         uint256 chainId;
         assembly { chainId := chainid() }
@@ -1168,6 +1168,10 @@ contract TokenMapped is ContextUpgradeSafe, AuthQuota {
 	
     function totalMapped() virtual public view returns (uint) {
         return IERC20(token).balanceOf(address(this));
+    }
+    
+    function needApprove() virtual public pure returns (bool) {
+        return true;
     }
     
     function stake(uint volume, uint chainId, address to) virtual external {
@@ -1211,11 +1215,13 @@ contract TokenMapped is ContextUpgradeSafe, AuthQuota {
         _redeem(authorizer, to, volume, chainId, txHash);
     }
 
-    function receive(uint256 fromChainId, address to, uint256 nonce, uint256 volume, Signature[] memory signatures) virtual external {
+    function receive(uint256 fromChainId, address to, uint256 nonce, uint256 volume, Signature[] memory signatures) virtual external payable {
         require(received[fromChainId][to][nonce] == 0, 'withdrawn already');
         uint N = signatures.length;
         require(N >= config[_minSignatures_], 'too few signatures');
         for(uint i=0; i<N; i++) {
+            for(uint j=0; j<i; j++)
+                require(signatures[i].signatory != signatures[j].signatory, 'repetitive signatory');
             bytes32 structHash = keccak256(abi.encode(RECEIVE_TYPEHASH, fromChainId, to, nonce, volume, signatures[i].signatory));
             bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
             address signatory = ecrecover(digest, signatures[i].v, signatures[i].r, signatures[i].s);
@@ -1269,7 +1275,7 @@ contract MappableToken is ERC20UpgradeSafe, AuthQuota, IPermit {
 	}
 	
 	function __MappableToken_init_unchained() public governance {
-        token = address(this);
+        token = address(0);
         config[_minSignatures_] = 1;
         
         uint256 chainId;
@@ -1280,6 +1286,10 @@ contract MappableToken is ERC20UpgradeSafe, AuthQuota, IPermit {
 	
     function totalMapped() virtual public view returns (uint) {
         return balanceOf(address(this));
+    }
+    
+    function needApprove() virtual public pure returns (bool) {
+        return false;
     }
     
     function stake(uint volume, uint chainId, address to) virtual external {
@@ -1323,11 +1333,13 @@ contract MappableToken is ERC20UpgradeSafe, AuthQuota, IPermit {
         _redeem(authorizer, to, volume, chainId, txHash);
     }
     
-    function receive(uint256 fromChainId, address to, uint256 nonce, uint256 volume, Signature[] memory signatures) virtual external {
+    function receive(uint256 fromChainId, address to, uint256 nonce, uint256 volume, Signature[] memory signatures) virtual external payable {
         require(received[fromChainId][to][nonce] == 0, 'withdrawn already');
         uint N = signatures.length;
         require(N >= config[_minSignatures_], 'too few signatures');
         for(uint i=0; i<N; i++) {
+            for(uint j=0; j<i; j++)
+                require(signatures[i].signatory != signatures[j].signatory, 'repetitive signatory');
             bytes32 structHash = keccak256(abi.encode(RECEIVE_TYPEHASH, fromChainId, to, nonce, volume, signatures[i].signatory));
             bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
             address signatory = ecrecover(digest, signatures[i].v, signatures[i].r, signatures[i].s);
@@ -1397,6 +1409,10 @@ contract MappingToken is ERC20CappedUpgradeSafe, AuthQuota, IPermit {
         DOMAIN_SEPARATOR = keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256(bytes(name())), chainId, address(this)));
 	}
 	
+    function needApprove() virtual public pure returns (bool) {
+        return false;
+    }
+    
     function _mint(address authorizer, address to, uint volume, uint chainId, uint txHash) virtual internal {
         require(!minted[chainId ^ txHash], 'minted already');
         minted[chainId ^ txHash] = true;
@@ -1440,11 +1456,13 @@ contract MappingToken is ERC20CappedUpgradeSafe, AuthQuota, IPermit {
     }
     event Send(address indexed from, uint indexed toChainId, address indexed to, uint nonce, uint volume);
 
-    function receive(uint256 fromChainId, address to, uint256 nonce, uint256 volume, Signature[] memory signatures) virtual external {
+    function receive(uint256 fromChainId, address to, uint256 nonce, uint256 volume, Signature[] memory signatures) virtual external payable {
         require(received[fromChainId][to][nonce] == 0, 'withdrawn already');
         uint N = signatures.length;
         require(N >= config[_minSignatures_], 'too few signatures');
         for(uint i=0; i<N; i++) {
+            for(uint j=0; j<i; j++)
+                require(signatures[i].signatory != signatures[j].signatory, 'repetitive signatory');
             bytes32 structHash = keccak256(abi.encode(RECEIVE_TYPEHASH, fromChainId, to, nonce, volume, signatures[i].signatory));
             bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
             address signatory = ecrecover(digest, signatures[i].v, signatures[i].r, signatures[i].s);
