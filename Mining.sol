@@ -1070,4 +1070,8 @@ contract Mine is Governable {
         IERC20(reward).safeApprove(pool, amount);
     }
     
+    function approveToken(address token, address pool, uint amount) public governance {
+        IERC20(token).safeApprove(pool, amount);
+    }
+    
 }
