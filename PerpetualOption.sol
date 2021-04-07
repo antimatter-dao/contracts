@@ -1748,23 +1748,22 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
     //        decCur = decCur.sub(totalCur);
     //}
 
-    function prices(uint priceFloor, uint priceCap, uint totalCall, uint totalPut) public pure returns (uint priceUnderlying, uint priceCall, uint pricePut) {
+    function priceValue(uint priceFloor, uint priceCap, uint totalCall, uint totalPut) public pure returns (uint priceUnderlying, uint valueReserve) {
         priceUnderlying = (priceFloor.mul(totalCall).add(priceCap.mul(totalPut))).div(totalCall.add(totalPut));
-        priceCall = priceUnderlying.sub(priceFloor);
-        pricePut = priceCap.sub(priceUnderlying);
+        valueReserve = priceUnderlying.sub(priceFloor).mul(totalCall).add(priceCap.sub(priceUnderlying).mul(totalPut)).div(1e18);
     }
     
-    function prices4(address underlying, address currency, uint priceFloor, uint priceCap) public view returns (uint priceUnderlying, uint priceCall, uint pricePut) {
+    function priceValue4(address underlying, address currency, uint priceFloor, uint priceCap) public view returns (uint priceUnderlying, uint valueReserve) {
         address call = calls[underlying][currency][priceFloor][priceCap];
         address put  = puts [underlying][currency][priceFloor][priceCap];
         if(put == address(0))                                                                      // single check is sufficient
-            return (0, 0, 0);
-        return prices(priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply());
+            return (0, 0);
+        return priceValue(priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply());
     }
     
-    function prices1(address callOrPut) public view returns (uint priceUnderlying, uint priceCall, uint pricePut) {
+    function priceValue1(address callOrPut) public view returns (uint priceUnderlying, uint valueReserve) {
         (address underlying, address currency, uint priceFloor, uint priceCap) = Call(callOrPut).attributes();
-        return prices4(underlying, currency, priceFloor, priceCap);
+        return priceValue4(underlying, currency, priceFloor, priceCap);
     }
     
     function priceTo18(uint _price, uint8 underlyingDecimals, uint8 currencyDecimals) public pure returns (uint) {
@@ -1848,11 +1847,8 @@ contract Call is ERC20UpgradeSafe {
         return (underlying, currency, priceFloor, priceCap);
     }
     
-    function price() public view returns (uint p) {
-        (, p, ) = Factory(factory).prices1(address(this));
-    }
-    function price18() public view returns (uint) {
-        return Factory(factory).priceTo18a(price(), underlying, currency);
+    function priceValue() public view returns (uint priceUnderlying, uint valueReserve) {
+        return Factory(factory).priceValue1(address(this));
     }
 }
 
@@ -1921,10 +1917,7 @@ contract Put is ERC20UpgradeSafe, Constants {
         return (underlying, currency, priceFloor, priceCap);
     }
     
-    function price() public view returns (uint p) {
-        (, , p) = Factory(factory).prices1(address(this));
-    }
-    function price18() public view returns (uint) {
-        return Factory(factory).priceTo18a(price(), underlying, currency);
+    function priceValue() public view returns (uint priceUnderlying, uint valueReserve) {
+        return Factory(factory).priceValue1(address(this));
     }
 }
