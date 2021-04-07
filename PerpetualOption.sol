@@ -1479,11 +1479,13 @@ contract Constants {
     bytes32 internal constant _Call_            = 'Call';
     bytes32 internal constant _Put_             = 'Put';
     bytes32 internal constant _permissionless_  = 'permissionless';
-    bytes32 internal constant _feeRate_         = 'feeRate';
+    //bytes32 internal constant _feeRate_         = 'feeRate';
     bytes32 internal constant _feeTo_           = 'feeTo';
     bytes32 internal constant _uniswapRounter_  = 'uniswapRounter';
     bytes32 internal constant _WETH_            = 'WETH';
 
+    uint256 internal constant MAX_FEE_RATE      = 0.10 ether;   // 10%
+    
     //string  internal constant INPUT_OVERFLOW    = 'INPUT_OVERFLOW';
     //uint256 internal constant MIN_UINT256       = 0;
     //uint256 internal constant MAX_UINT256       = uint256(-1);
@@ -1504,6 +1506,14 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
     function length() public view returns (uint) {
         return allCalls.length;
     }
+    
+    uint public feeRate;
+    
+    function setFee(uint feeRate_, address feeTo) public governance {
+        require(feeRate_ <= MAX_FEE_RATE);
+        feeRate = feeRate_;
+        config[_feeTo_] = uint(feeTo);
+    }
 
     function __Factory_init(address governor, address implCall, address implPut, address feeTo) public initializer {
         __Governable_init_unchained(governor);
@@ -1513,9 +1523,8 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
     function __Factory_init_unchained(address implCall, address implPut, address feeTo) public governance {
         productImplementations[_Call_]  = implCall;
         productImplementations[_Put_]   = implPut;
-        config[_feeRate_]               = 0.005 ether;        // 0.5%
-        config[_feeTo_]                 = uint(feeTo);
         config[_uniswapRounter_]        = uint(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
+        setFee(0.005 ether, feeTo);     // 0.5%
     }
     
     function upgradeProductImplementationsTo(address implCall, address implPut) external governance {
@@ -1553,10 +1562,18 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
     }
     event CreateOption(address indexed creator, address indexed underlying, address indexed currency, uint priceFloor, uint priceCap, address call, address put, uint count);
     
+        //if(dCur > 0) {
+        //    IERC20(currency).safeTransferFrom(sender, put, uint(dCur));
+        //    IERC20(currency).safeTransferFrom(sender, address(config[_feeTo_]), uint(dCur).mul(feeRate).div(1e18));
+        //} else if(dCur < 0) {
+        //    uint fee = uint(-dCur).mul(feeRate).div(1e18);
+        //    Put(put).withdraw_(address(config[_feeTo_]), fee);
+        //    Put(put).withdraw_(sender, uint(-dCur).sub(fee));
+        //}
     function _transfer(address payable sender, address callOrPut, address undOrCur, int vol) internal {
         if(vol > 0) {
             address from = sender;
-            uint fee = uint(vol).mul(config[_feeRate_]).div(1e18);
+            uint fee = uint(vol).mul(feeRate).div(1e18);
             if(msg.value > 0 && undOrCur == address(config[_WETH_])) {
                 uint deltaAndFee = uint(vol).add(fee);
                 require(msg.value >= deltaAndFee, 'msg.value not enough');
@@ -1568,7 +1585,7 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
             IERC20(undOrCur).safeTransferFrom(from, callOrPut, uint(vol));
             IERC20(undOrCur).safeTransferFrom(from, address(config[_feeTo_]), fee);
         } else if(vol < 0) {
-            uint fee = uint(-vol).mul(config[_feeRate_]).div(1e18);
+            uint fee = uint(-vol).mul(feeRate).div(1e18);
             Call(callOrPut).withdraw_(address(config[_feeTo_]), fee);
             address to = sender;
             if(undOrCur == address(config[_WETH_]))
@@ -1601,20 +1618,10 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         //uint totalCur;    // share priceCap   instead of totalCur to avoid stack too deep errors
         //(dUnd, dCur, totalUnd, totalCur) = calcDelta(priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply(), dCall, dPut);
         (dUnd, dCur, priceFloor, priceCap) = calcDelta(priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply(), dCall, dPut);
-        require(SafeMath.add_(dUnd, Math.abs(dUnd).mul(config[_feeRate_]).div(1e18)) <= undMax && SafeMath.add_(dCur, Math.abs(dCur).mul(config[_feeRate_]).div(1e18)) <= curMax, 'slippage too high');
+        require(SafeMath.add_(dUnd, Math.abs(dUnd).mul(feeRate).div(1e18)) <= undMax && SafeMath.add_(dCur, Math.abs(dCur).mul(feeRate).div(1e18)) <= curMax, 'slippage too high');
 
         _transfer(sender, call, underlying, dUnd);
-
         _transfer(sender, put, currency, dCur);
-        //if(dCur > 0) {
-        //    IERC20(currency).safeTransferFrom(sender, put, uint(dCur));
-        //    IERC20(currency).safeTransferFrom(sender, address(config[_feeTo_]), uint(dCur).mul(config[_feeRate_]).div(1e18));
-        //} else if(dCur < 0) {
-        //    uint fee = uint(-dCur).mul(config[_feeRate_]).div(1e18);
-        //    Put(put).withdraw_(address(config[_feeTo_]), fee);
-        //    Put(put).withdraw_(sender, uint(-dCur).sub(fee));
-        //}
-        
         _checkMistakeETH(sender, underlying, currency, dUnd, dCur);
         
         if(dCall > 0)
@@ -1709,8 +1716,8 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
 
     function calcDeltaWithFeeAndSlippage(uint priceFloor, uint priceCap, uint totalCall, uint totalPut, int dCall, int dPut, uint slippage) public view returns (int undMax, int curMax, uint totalUnd, uint totalCur) {
         (undMax, curMax, totalUnd, totalCur) = calcDelta(priceFloor, priceCap, totalCall, totalPut, dCall, dPut);
-        undMax = SafeMath.add_(undMax, Math.abs(undMax).mul(config[_feeRate_].add(slippage)).div(1e18));
-        curMax = SafeMath.add_(curMax, Math.abs(curMax).mul(config[_feeRate_].add(slippage)).div(1e18));
+        undMax = SafeMath.add_(undMax, Math.abs(undMax).mul(feeRate.add(slippage)).div(1e18));
+        curMax = SafeMath.add_(curMax, Math.abs(curMax).mul(feeRate.add(slippage)).div(1e18));
     }
 
     //function calcDelta(uint priceFloor, uint priceCap, uint totalCall, uint totalPut, uint incCall, uint incPut, uint decCall, uint decPut) public pure returns (uint incUnd, uint incCur, uint decUnd, uint decCur, uint totalUnd, uint totalCur) {
