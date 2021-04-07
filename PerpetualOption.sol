@@ -1481,7 +1481,7 @@ contract Constants {
     bytes32 internal constant _permissionless_  = 'permissionless';
     //bytes32 internal constant _feeRate_         = 'feeRate';
     bytes32 internal constant _feeTo_           = 'feeTo';
-    bytes32 internal constant _uniswapRounter_  = 'uniswapRounter';
+    //bytes32 internal constant _uniswapRounter_  = 'uniswapRounter';
     bytes32 internal constant _WETH_            = 'WETH';
 
     uint256 internal constant MAX_FEE_RATE      = 0.10 ether;   // 10%
@@ -1515,15 +1515,16 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         config[_feeTo_] = uint(feeTo);
     }
 
-    function __Factory_init(address governor, address implCall, address implPut, address feeTo) public initializer {
+    function __Factory_init(address governor, address implCall, address implPut, address WETH, address feeTo) public initializer {
         __Governable_init_unchained(governor);
-        __Factory_init_unchained(implCall, implPut, feeTo);
+        __Factory_init_unchained(implCall, implPut, WETH, feeTo);
     }
 
-    function __Factory_init_unchained(address implCall, address implPut, address feeTo) public governance {
+    function __Factory_init_unchained(address implCall, address implPut, address WETH, address feeTo) public governance {
         productImplementations[_Call_]  = implCall;
         productImplementations[_Put_]   = implPut;
-        config[_uniswapRounter_]        = uint(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
+        config[_WETH_]                  = uint(WETH);
+        //config[_uniswapRounter_]        = uint(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
         setFee(0.005 ether, feeTo);     // 0.5%
     }
     
