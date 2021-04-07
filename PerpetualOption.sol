@@ -1646,58 +1646,68 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         return swap(underlying, currency, priceFloor, priceCap, volCall, volPut, undMax, curMax);
     }
     function mint(address callOrPut, int volCall, int volPut, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        (, , dUnd, dCur) = swap(Call(callOrPut).underlying(), Call(callOrPut).currency(), Call(callOrPut).priceFloor(), Call(callOrPut).priceCap(), volCall, volPut, undMax, curMax);
+        (address underlying, address currency, uint priceFloor, uint priceCap) = Call(callOrPut).attributes();
+        (, , dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, volCall, volPut, undMax, curMax);
     }
 
     function mintCall4(address underlying, address currency, uint priceFloor, uint priceCap, int volCall, int undMax, int curMax) public payable returns (address call, int dUnd, int dCur) {
         (call, , dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, volCall, 0, undMax, curMax);
     }
     function mintCall(address call, int volCall, int undMax, int curMax) public payable returns (int dUnd, int dCur) {
-        (, , dUnd, dCur) = swap(Call(call).underlying(), Call(call).currency(), Call(call).priceFloor(), Call(call).priceCap(), volCall, 0, undMax, curMax);
+        (address underlying, address currency, uint priceFloor, uint priceCap) = Call(call).attributes();
+        (, , dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, volCall, 0, undMax, curMax);
     }
     function mintCall_(address payable sender, address call, int volCall, int undMax, int curMax) public payable returns (int dUnd, int dCur) {
-        require(msg.sender == call, 'Only Call');
-        (, , dUnd, dCur) = _swap(sender, Call(call).underlying(), Call(call).currency(), Call(call).priceFloor(), Call(call).priceCap(), volCall, 0, undMax, curMax);
+        (address underlying, address currency, uint priceFloor, uint priceCap) = Call(call).attributes();
+        require(msg.sender == call && call == calls[underlying][currency][priceFloor][priceCap], 'Only Call');
+        (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, volCall, 0, undMax, curMax);
     }
 
     function mintPut4(address underlying, address currency, uint priceFloor, uint priceCap, int volPut, int undMax, int curMax) public payable returns (address put, int dUnd, int dCur) {
         (, put, dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax);
     }
     function mintPut(address put, int volPut, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        (, , dUnd, dCur) = swap(Put(put).underlying(), Put(put).currency(), Put(put).priceFloor(), Put(put).priceCap(), 0, volPut, undMax, curMax);
+        (address underlying, address currency, uint priceFloor, uint priceCap) = Put(put).attributes();
+        (, , dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax);
     }
     function mintPut_(address payable sender, address put, int volPut, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        require(msg.sender == put, 'Only Put');
-        (, , dUnd, dCur) = _swap(sender, Put(put).underlying(), Put(put).currency(), Put(put).priceFloor(), Put(put).priceCap(), 0, volPut, undMax, curMax);
+        (address underlying, address currency, uint priceFloor, uint priceCap) = Put(put).attributes();
+        require(msg.sender == put && put == puts[underlying][currency][priceFloor][priceCap], 'Only Put');
+        (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax);
     }
 
     function burn4(address underlying, address currency, uint priceFloor, uint priceCap, int volCall, int volPut, int undMax, int curMax) public payable returns (address call, address put, int dUnd, int dCur) {
         return swap(underlying, currency, priceFloor, priceCap, volCall, volPut, undMax, curMax);
     }
     function burn(address callOrPut, int volCall, int volPut, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        (, , dUnd, dCur) = swap(Call(callOrPut).underlying(), Call(callOrPut).currency(), Call(callOrPut).priceFloor(), Call(callOrPut).priceCap(), volCall, volPut, undMax, curMax);
+        (address underlying, address currency, uint priceFloor, uint priceCap) = Call(callOrPut).attributes();
+        (, , dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, volCall, volPut, undMax, curMax);
     }
 
     function burnCall4(address underlying, address currency, uint priceFloor, uint priceCap, int volCall, int undMax, int curMax) public payable returns (address call, int dUnd, int dCur) {
         (call, , dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, volCall, 0, undMax, curMax);
     }
     function burnCall(address call, int volCall, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        (, , dUnd, dCur) = swap(Call(call).underlying(), Call(call).currency(), Call(call).priceFloor(), Call(call).priceCap(), volCall, undMax, curMax, curMax);
+        (address underlying, address currency, uint priceFloor, uint priceCap) = Call(call).attributes();
+        (, , dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, volCall, undMax, curMax, curMax);
     }
     function burnCall_(address payable sender, address call, int volCall, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        require(msg.sender == call, 'Only Call');
-        (, , dUnd, dCur) = _swap(sender, Call(call).underlying(), Call(call).currency(), Call(call).priceFloor(), Call(call).priceCap(), volCall, undMax, curMax, curMax);
+        (address underlying, address currency, uint priceFloor, uint priceCap) = Call(call).attributes();
+        require(msg.sender == call && call == calls[underlying][currency][priceFloor][priceCap], 'Only Call');
+        (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, volCall, undMax, curMax, curMax);
     }
 
     function burnPut4(address underlying, address currency, uint priceFloor, uint priceCap, int volPut, int undMax, int curMax) public payable returns (address put, int dUnd, int dCur) {
         (, put, dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax);
     }
     function burnPut(address put, int volPut, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        (, , dUnd, dCur) = swap(Put(put).underlying(), Put(put).currency(), Put(put).priceFloor(), Put(put).priceCap(), 0, volPut, undMax, curMax);
+        (address underlying, address currency, uint priceFloor, uint priceCap) = Put(put).attributes();
+        (, , dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax);
     }
     function burnPut_(address payable sender, address put, int volPut, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        require(msg.sender == put, 'Only Put');
-        (, , dUnd, dCur) = _swap(sender, Put(put).underlying(), Put(put).currency(), Put(put).priceFloor(), Put(put).priceCap(), 0, volPut, undMax, curMax);
+        (address underlying, address currency, uint priceFloor, uint priceCap) = Put(put).attributes();
+        require(msg.sender == put && put == puts[underlying][currency][priceFloor][priceCap], 'Only Put');
+        (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax);
     }
 
     function calc(uint priceFloor, uint priceCap, uint totalCall, uint totalPut) public pure returns (uint totalUnd, uint totalCur) {
@@ -1753,7 +1763,8 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
     }
     
     function prices1(address callOrPut) public view returns (uint priceUnderlying, uint priceCall, uint pricePut) {
-        return prices4(Call(callOrPut).underlying(), Call(callOrPut).currency(), Call(callOrPut).priceFloor(), Call(callOrPut).priceCap());
+        (address underlying, address currency, uint priceFloor, uint priceCap) = Call(callOrPut).attributes();
+        return prices4(underlying, currency, priceFloor, priceCap);
     }
     
     function priceTo18(uint _price, uint8 underlyingDecimals, uint8 currencyDecimals) public pure returns (uint) {
