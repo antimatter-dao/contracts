@@ -1582,6 +1582,12 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         }
     }
     
+    function _checkMistakeETH(address payable sender, address underlying, address currency, int dUnd, int dCur) internal {
+        address WETH = address(config[_WETH_]);
+        if(msg.value > 0 && ((underlying != WETH && currency != WETH) || (underlying == WETH && dUnd <= 0) || (currency == WETH && dCur <= 0)))
+            sender.transfer(msg.value);
+    }
+    
     function swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax) public payable returns (address call, address put, int dUnd, int dCur) {
         return _swap(_msgSender(), underlying, currency, priceFloor, priceCap, dCall, dPut, undMax, curMax);
     }
@@ -1608,6 +1614,8 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         //    Put(put).withdraw_(address(config[_feeTo_]), fee);
         //    Put(put).withdraw_(sender, uint(-dCur).sub(fee));
         //}
+        
+        _checkMistakeETH(sender, underlying, currency, dUnd, dCur);
         
         if(dCall > 0)
             Call(call).mint_(sender, uint(dCall));
