@@ -573,11 +573,19 @@ library Math {
     function max(uint256 a, uint256 b) internal pure returns (uint256) {
         return a >= b ? a : b;
     }
+    
+    function max_(int256 a, int256 b) internal pure returns (int256) {
+        return a >= b ? a : b;
+    }
 
     /**
      * @dev Returns the smallest of two numbers.
      */
     function min(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a < b ? a : b;
+    }
+
+    function min_(int256 a, int256 b) internal pure returns (int256) {
         return a < b ? a : b;
     }
 
@@ -647,6 +655,11 @@ library SafeMath {
     function sub(uint256 a, uint256 b) internal pure returns (uint256) {
         return sub(a, b, "SafeMath: subtraction overflow");
     }
+    
+    function sub(uint256 a, int256 b) internal pure returns (uint256 c) {
+        c = a - uint256(b);
+        require(b >= 0 && c <= a || b < 0 && c > a, "SafeMath: subtraction overflow");
+    }
 
     /**
      * @dev Returns the subtraction of two unsigned integers, reverting with custom message on
@@ -670,6 +683,11 @@ library SafeMath {
     
     function sub_(uint256 a, uint256 b) internal pure returns (int256 c) {
         c = int256(a - b);
+        require(a >= b && c >= 0 || a < b && c < 0, "SafeMath: sub_ overflow");
+    }
+
+    function sub_(int256 a, int256 b) internal pure returns (int256 c) {
+        c = a - b;
         require(a >= b && c >= 0 || a < b && c < 0, "SafeMath: sub_ overflow");
     }
 
@@ -1496,6 +1514,7 @@ contract Constants {
 contract Factory is Configurable, ContextUpgradeSafe, Constants {
     using SafeERC20 for IERC20;
     using SafeMath for uint;
+    using SafeMath for int;
 
     mapping(bytes32 => address) public productImplementations;
     mapping(address => mapping(address => mapping(uint => mapping(uint => address)))) public calls;     // _underlying => _currency => _priceFloor => _priceCap => call
@@ -1583,8 +1602,13 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
                     sender.transfer(msg.value - deltaAndFee);
                 from = address(this);
             }
-            IERC20(undOrCur).safeTransferFrom(from, callOrPut, uint(vol));
-            IERC20(undOrCur).safeTransferFrom(from, address(config[_feeTo_]), fee);
+            if(from == address(this)) {
+                IERC20(undOrCur).safeTransfer(callOrPut, uint(vol));
+                IERC20(undOrCur).safeTransfer(address(config[_feeTo_]), fee);
+            } else {
+                IERC20(undOrCur).safeTransferFrom(from, callOrPut, uint(vol));
+                IERC20(undOrCur).safeTransferFrom(from, address(config[_feeTo_]), fee);
+            }
         } else if(vol < 0) {
             uint fee = uint(-vol).mul(feeRate).div(1e18);
             Call(callOrPut).withdraw_(address(config[_feeTo_]), fee);
@@ -1642,6 +1666,40 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
     }
     event Swap(address indexed sender, address indexed underlying, address indexed currency, uint priceFloor, uint priceCap, address call, address put, int dCall, int dPut, int dUnd, int dCur);
 
+    function _swap2(address undFrom, address curFrom, address underlying, address currency, uint priceFloor, uint priceCap, int volCall, int volPut, int undMax, int curMax) internal returns (address call, address put, int dUnd, int dCur) {
+        call = calls[underlying][currency][priceFloor][priceCap];
+        put  = puts [underlying][currency][priceFloor][priceCap];
+
+        if(volCall < 0)
+            Call(call).transferFrom(undFrom, address(this), uint(-volCall));
+        if(volPut < 0)
+            Put (put ).transferFrom(curFrom, address(this), uint(-volPut));
+        
+        if(undMax > 0)
+            IERC20(underlying).safeTransferFrom(undFrom, address(this), uint(undMax));
+        if(curMax > 0)
+            IERC20(currency  ).safeTransferFrom(curFrom, address(this), uint(curMax));
+        
+        (call, put, dUnd, dCur) = _swap(address(uint160(address(this))), underlying, currency, priceFloor, priceCap, volCall, volPut, undMax, curMax);
+        
+        if(Math.max_(0, undMax) > dUnd)
+            IERC20(underlying).safeTransfer(undFrom, uint(Math.max_(0, undMax).sub_(dUnd)));
+        if(Math.max_(0, curMax) > dCur)
+            IERC20(currency  ).safeTransfer(curFrom, uint(Math.max_(0, curMax).sub_(dCur)));
+        
+        if(volCall > 0)
+            Call(call).transfer(undFrom, uint(volCall));
+        if(volPut > 0)
+            Put (put ).transfer(curFrom, uint(volPut));
+    }
+    
+    function swap2_(address undFrom, address curFrom, address underlying, address currency, uint priceFloor, uint priceCap, int volCall, int volPut, int undMax, int curMax) external governance returns (address call, address put, int dUnd, int dCur) {
+        uint oldFeeRate = feeRate;
+        feeRate = 0;
+        (call, put, dUnd, dCur) = _swap2(undFrom, curFrom, underlying, currency, priceFloor, priceCap, volCall, volPut, undMax, curMax);
+        feeRate = oldFeeRate;
+    }
+    
     function mint4(address underlying, address currency, uint priceFloor, uint priceCap, int volCall, int volPut, int undMax, int curMax) public payable returns (address call, address put, int dUnd, int dCur) {
         return swap(underlying, currency, priceFloor, priceCap, volCall, volPut, undMax, curMax);
     }
