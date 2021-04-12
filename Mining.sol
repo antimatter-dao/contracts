@@ -826,10 +826,14 @@ contract StakingPool is Configurable, StakingRewards {
 	bytes32 internal constant _rewards2Begin_   = 'rewards2Begin';
 
 	uint public lep;            // 1: linear, 2: exponential, 3: power
-	uint public period;
+	uint public period;         // obsolete
 	uint public begin;
 
     mapping (address => uint256) public paid;
+    
+    address swapFactory;
+    address[] pathTVL;
+    address[] pathAPY;
 
     function initialize(address _governor, 
         address _rewardsDistribution,
@@ -866,9 +870,10 @@ contract StakingPool is Configurable, StakingRewards {
         
         // calc rewardDelta in period
         if(lep == 3) {                                                              // power
-            uint y = period.mul(1 ether).div(lastUpdateTime.add(rewardsDuration).sub(begin));
-            uint amt1 = amt.mul(1 ether).div(y);
-            uint amt2 = amt1.mul(period).div(now.add(rewardsDuration).sub(begin));
+            //uint y = period.mul(1 ether).div(lastUpdateTime.add(rewardsDuration).sub(begin));
+            //uint amt1 = amt.mul(1 ether).div(y);
+            //uint amt2 = amt1.mul(period).div(now.add(rewardsDuration).sub(begin));
+            uint amt2 = amt.mul(lastUpdateTime.add(rewardsDuration).sub(begin)).div(now.add(rewardsDuration).sub(begin));
             amt = amt.sub(amt2);
         } else if(lep == 2) {                                                       // exponential
             if(now.sub(lastUpdateTime) < rewardsDuration)
@@ -947,6 +952,73 @@ contract StakingPool is Configurable, StakingRewards {
         return config[_rewards2Ratio_];
     }
     
+    function setPath(address swapFactory_, address[] memory pathTVL_, address[] memory pathAPY_) virtual external governance {
+        uint m = pathTVL_.length;
+        uint n = pathAPY_.length;
+        require(m > 0 && n > 0 && pathTVL_[m-1] == pathAPY_[n-1]);
+        for(uint i=0; i<m-1; i++)
+            require(address(0) != IUniswapV2Factory(swapFactory_).getPair(pathTVL_[i], pathTVL_[i+1]));
+        for(uint i=0; i<n-1; i++)
+            require(address(0) != IUniswapV2Factory(swapFactory_).getPair(pathAPY_[i], pathAPY_[i+1]));
+            
+        swapFactory = swapFactory_;
+        pathTVL = pathTVL_;
+        pathAPY = pathAPY_;
+    }
+    
+    function lptValueTotal() virtual public view returns (uint) {
+        require(pathTVL.length > 0 && pathTVL[0] != address(stakingToken));
+        return IERC20(pathTVL[0]).balanceOf(address(stakingToken)).mul(2);
+    }
+    
+    function lptValue(uint vol) virtual public view returns (uint) {
+        return lptValueTotal().mul(vol).div(IERC20(stakingToken).totalSupply());
+    }
+    
+    function swapValue(uint vol, address[] memory path) virtual public view returns (uint v) {
+        v = vol;
+        for(uint i=0; i<path.length-1; i++) {
+            (uint reserve0, uint reserve1,) = IUniswapV2Pair(IUniswapV2Factory(swapFactory).getPair(path[i], path[i+1])).getReserves();
+            v =  path[i+1] < path[i] ? v.mul(reserve0) / reserve1 : v.mul(reserve1) / reserve0;
+        }
+    }
+    
+    function TVL() virtual public view returns (uint tvl) {
+        if(pathTVL[0] != address(stakingToken))
+            tvl = lptValueTotal();
+        else
+            tvl = totalSupply();
+        tvl = swapValue(tvl, pathTVL);
+    }
+    
+    function APY() virtual public view returns (uint) {
+        uint amt = rewardsToken.allowance(rewardsDistribution, address(this)).sub0(rewards[address(0)]);
+        
+        if(lep == 3) {                                                              // power
+            uint amt2 = amt.mul(365 days).mul(now.add(rewardsDuration).sub(begin)).div(now.add(1).add(rewardsDuration).sub(begin));
+            amt = amt.sub(amt2);
+        } else if(lep == 2) {                                                       // exponential
+            amt = amt.mul(365 days).div(rewardsDuration);
+        }else if(now < periodFinish)                                                // linear
+            amt = amt.mul(365 days).div(periodFinish.sub(lastUpdateTime));
+        else if(lastUpdateTime >= periodFinish)
+            amt = 0;
+        
+        require(address(rewardsToken) == pathAPY[0]);
+        amt = swapValue(amt, pathAPY);
+        return amt.mul(1e18).div(TVL());
+    }
+
+    // Reserved storage space to allow for layout changes in the future.
+    uint256[50] private ______gap;
+}
+
+interface IUniswapV2Factory {
+    function getPair(address tokenA, address tokenB) external view returns (address pair);
+}
+
+interface IUniswapV2Pair {
+    function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
 }
 
 interface IWETH is IERC20 {
