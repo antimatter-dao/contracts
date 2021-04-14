@@ -1940,20 +1940,25 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
     //        decCur = decCur.sub(totalCur);
     //}
 
-    function priceValue(uint priceFloor, uint priceCap, uint totalCall, uint totalPut) public pure returns (uint priceUnderlying, uint valueReserve) {
-        priceUnderlying = (priceFloor.mul(totalCall).add(priceCap.mul(totalPut))).div(totalCall.add(totalPut));
-        valueReserve = priceUnderlying.sub(priceFloor).mul(totalCall).add(priceCap.sub(priceUnderlying).mul(totalPut)).div(1e18);
+    function priceValue(uint priceFloor, uint priceCap, uint totalCall, uint totalPut) public pure returns (uint price, uint priceCall, uint pricePut, uint volume, uint amount, uint value) {
+        price     = (priceFloor.mul(totalCall).add(priceCap.mul(totalPut))).div(totalCall.add(totalPut));
+        uint dp2  = priceCap.sub(priceFloor).mul(2);
+        priceCall = dp2.mul(totalPut ).div(totalCall.add(totalPut)).mul(totalPut ).div(totalCall.add(totalPut));
+        pricePut  = dp2.mul(totalCall).div(totalCall.add(totalPut)).mul(totalCall).div(totalCall.add(totalPut));
+        volume    = pricePut.mul(totalPut).div(price);
+        amount    = priceCall.mul(totalCall).div(1e18);
+        value     = volume.mul(price).div(1e18).add(amount);
     }
     
-    function priceValue4(address underlying, address currency, uint priceFloor, uint priceCap) public view returns (uint priceUnderlying, uint valueReserve) {
+    function priceValue4(address underlying, address currency, uint priceFloor, uint priceCap) public view returns (uint price, uint priceCall, uint pricePut, uint volume, uint amount, uint value) {
         address call = calls[underlying][currency][priceFloor][priceCap];
         address put  = puts [underlying][currency][priceFloor][priceCap];
         if(put == address(0))                                                                      // single check is sufficient
-            return (0, 0);
+            return (0, 0, 0, 0, 0, 0);
         return priceValue(priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply());
     }
     
-    function priceValue1(address callOrPut) public view returns (uint priceUnderlying, uint valueReserve) {
+    function priceValue1(address callOrPut) public view returns (uint price, uint priceCall, uint pricePut, uint volume, uint amount, uint value) {
         (address underlying, address currency, uint priceFloor, uint priceCap) = Call(callOrPut).attributes();
         return priceValue4(underlying, currency, priceFloor, priceCap);
     }
@@ -2039,7 +2044,7 @@ contract Call is ERC20UpgradeSafe {
         return (underlying, currency, priceFloor, priceCap);
     }
     
-    function priceValue() public view returns (uint priceUnderlying, uint valueReserve) {
+    function priceValue() public view returns (uint price, uint priceCall, uint pricePut, uint volume, uint amount, uint value) {
         return Factory(factory).priceValue1(address(this));
     }
 }
@@ -2109,7 +2114,7 @@ contract Put is ERC20UpgradeSafe, Constants {
         return (underlying, currency, priceFloor, priceCap);
     }
     
-    function priceValue() public view returns (uint priceUnderlying, uint valueReserve) {
+    function priceValue() public view returns (uint price, uint priceCall, uint pricePut, uint volume, uint amount, uint value) {
         return Factory(factory).priceValue1(address(this));
     }
 }
