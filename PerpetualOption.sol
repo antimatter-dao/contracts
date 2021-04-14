@@ -564,6 +564,68 @@ contract ContextUpgradeSafe is Initializable {
 }
 
 /**
+ * @dev Contract module that helps prevent reentrant calls to a function.
+ *
+ * Inheriting from `ReentrancyGuard` will make the {nonReentrant} modifier
+ * available, which can be applied to functions to make sure there are no nested
+ * (reentrant) calls to them.
+ *
+ * Note that because there is a single `nonReentrant` guard, functions marked as
+ * `nonReentrant` may not call one another. This can be worked around by making
+ * those functions `private`, and then adding `external` `nonReentrant` entry
+ * points to them.
+ *
+ * TIP: If you would like to learn more about reentrancy and alternative ways
+ * to protect against it, check out our blog post
+ * https://blog.openzeppelin.com/reentrancy-after-istanbul/[Reentrancy After Istanbul].
+ */
+contract ReentrancyGuardUpgradeSafe is Initializable {
+    bool private _notEntered;
+
+
+    function __ReentrancyGuard_init() internal initializer {
+        __ReentrancyGuard_init_unchained();
+    }
+
+    function __ReentrancyGuard_init_unchained() internal initializer {
+
+
+        // Storing an initial non-zero value makes deployment a bit more
+        // expensive, but in exchange the refund on every call to nonReentrant
+        // will be lower in amount. Since refunds are capped to a percetange of
+        // the total transaction's gas, it is best to keep them low in cases
+        // like this one, to increase the likelihood of the full refund coming
+        // into effect.
+        _notEntered = true;
+
+    }
+
+
+    /**
+     * @dev Prevents a contract from calling itself, directly or indirectly.
+     * Calling a `nonReentrant` function from another `nonReentrant`
+     * function is not supported. It is possible to prevent this from happening
+     * by making the `nonReentrant` function external, and make it call a
+     * `private` function that does the actual work.
+     */
+    modifier nonReentrant() {
+        // On the first call to nonReentrant, _notEntered will be true
+        require(_notEntered, "ReentrancyGuard: reentrant call");
+
+        // Any calls to nonReentrant after this point will fail
+        _notEntered = false;
+
+        _;
+
+        // By storing the original value once again, a refund is triggered (see
+        // https://eips.ethereum.org/EIPS/eip-2200)
+        _notEntered = true;
+    }
+
+    uint256[49] private __gap;
+}
+
+/**
  * @dev Standard math utilities missing in the Solidity language.
  */
 library Math {
@@ -1493,6 +1555,11 @@ interface IWETH {
 }
 
 
+interface IFlashSwapCallee {
+    function onFlashSwap(address sender, address call, address put, int dCall, int dPut, int dUnd, int dCur, bytes memory data) external;
+}
+
+
 contract Constants {
     bytes32 internal constant _Call_            = 'Call';
     bytes32 internal constant _Put_             = 'Put';
@@ -1503,6 +1570,8 @@ contract Constants {
     bytes32 internal constant _WETH_            = 'WETH';
 
     uint256 internal constant MAX_FEE_RATE      = 0.10 ether;   // 10%
+    
+    //bytes internal constant NULL       = '';//new bytes(0);
     
     //string  internal constant INPUT_OVERFLOW    = 'INPUT_OVERFLOW';
     //uint256 internal constant MIN_UINT256       = 0;
@@ -1534,8 +1603,45 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         config[_feeTo_] = uint(feeTo);
     }
 
+    bool private _notEntered;
+    
+    /**
+     * @dev Prevents a contract from calling itself, directly or indirectly.
+     * Calling a `nonReentrant` function from another `nonReentrant`
+     * function is not supported. It is possible to prevent this from happening
+     * by making the `nonReentrant` function external, and make it call a
+     * `private` function that does the actual work.
+     */
+    modifier nonReentrant() {
+        // On the first call to nonReentrant, _notEntered will be true
+        require(_notEntered, "ReentrancyGuard: reentrant call");
+
+        // Any calls to nonReentrant after this point will fail
+        _notEntered = false;
+
+        _;
+
+        // By storing the original value once again, a refund is triggered (see
+        // https://eips.ethereum.org/EIPS/eip-2200)
+        _notEntered = true;
+    }
+
+    function __ReentrancyGuard_init_unchained() internal governance {
+
+
+        // Storing an initial non-zero value makes deployment a bit more
+        // expensive, but in exchange the refund on every call to nonReentrant
+        // will be lower in amount. Since refunds are capped to a percetange of
+        // the total transaction's gas, it is best to keep them low in cases
+        // like this one, to increase the likelihood of the full refund coming
+        // into effect.
+        _notEntered = true;
+
+    }
+
     function __Factory_init(address governor, address implCall, address implPut, address WETH, address feeTo) public initializer {
         __Governable_init_unchained(governor);
+        __ReentrancyGuard_init_unchained();
         __Factory_init_unchained(implCall, implPut, WETH, feeTo);
     }
 
@@ -1630,10 +1736,20 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
             sender.transfer(msg.value);
     }
     
-    function swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax) public payable returns (address call, address put, int dUnd, int dCur) {
+    function swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, bytes memory data) public payable returns (address call, address put, int dUnd, int dCur) {
+        return _swap(_msgSender(), underlying, currency, priceFloor, priceCap, dCall, dPut, undMax, curMax, data);
+    }
+    function swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax) internal returns (address call, address put, int dUnd, int dCur) {
         return _swap(_msgSender(), underlying, currency, priceFloor, priceCap, dCall, dPut, undMax, curMax);
     }
+
     function _swap(address payable sender, address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax) internal returns (address call, address put, int dUnd, int dCur) {
+        (call, put, dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, dCall, dPut, undMax, curMax, '');
+        emit Swap(sender, underlying, currency, priceFloor, priceCap, call, put, dCall, dPut, dUnd, dCur);
+    }
+    event Swap(address indexed sender, address indexed underlying, address indexed currency, uint priceFloor, uint priceCap, address call, address put, int dCall, int dPut, int dUnd, int dCur);
+
+    function _swap(address payable sender, address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, bytes memory data) internal nonReentrant returns (address call, address put, int dUnd, int dCur) {
         call = calls[underlying][currency][priceFloor][priceCap];
         put  = puts [underlying][currency][priceFloor][priceCap];
         if(put == address(0))                                                                      // single check is sufficient
@@ -1644,27 +1760,37 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         //(dUnd, dCur, totalUnd, totalCur) = calcDelta(priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply(), dCall, dPut);
         (dUnd, dCur, priceFloor, priceCap) = calcDelta(priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply(), dCall, dPut);
         require(SafeMath.add_(dUnd, Math.abs(dUnd).mul(feeRate).div(1e18)) <= undMax && SafeMath.add_(dCur, Math.abs(dCur).mul(feeRate).div(1e18)) <= curMax, 'slippage too high');
-
-        _transfer(sender, call, underlying, dUnd);
-        _transfer(sender, put, currency, dCur);
         _checkMistakeETH(sender, underlying, currency, dUnd, dCur);
-        
+
         if(dCall > 0)
             Call(call).mint_(sender, uint(dCall));
-        else if(dCall < 0)
-            Call(call).burn_(sender, uint(-dCall));
-            
         if(dPut > 0)
             Put(put).mint_(sender, uint(dPut));
-        else if(dPut < 0)
+
+        if(dUnd < 0)
+            _transfer(sender, call, underlying, dUnd);
+        if(dCur < 0)
+            _transfer(sender, put, currency, dCur);
+        
+        if(data.length > 0)
+            IFlashSwapCallee(sender).onFlashSwap(sender, call, put, dCall, dPut, dUnd, dCur, data);
+        
+        if(dUnd > 0)
+            _transfer(sender, call, underlying, dUnd);
+        if(dCur > 0)
+            _transfer(sender, put, currency, dCur);
+        
+        if(dCall < 0)
+            Call(call).burn_(sender, uint(-dCall));
+        if(dPut < 0)
             Put(put).burn_(sender, uint(-dPut));
         
         //require(IERC20(underlying).balanceOf(call) >= totalUnd && IERC20(currency).balanceOf(put) >= totalCur, 'reserve less than expected');
         //emit Swap(sender, underlying, currency, priceFloor, priceCap, call, put, dCall, dPut, dUnd, dCur);
         require(IERC20(underlying).balanceOf(call) >= priceFloor && IERC20(currency).balanceOf(put) >= priceCap, 'reserve less than expected');     // share priceFloor and priceCap instead of totalUnd and totalCur to avoid stack too deep errors 
-        emit Swap(sender, underlying, currency, Call(call).priceFloor(), Call(call).priceCap(), call, put, dCall, dPut, dUnd, dCur);
+        emit Swap(sender, underlying, currency, Call(call).priceFloor(), Call(call).priceCap(), dCall, dPut, dUnd, dCur, data);
     }
-    event Swap(address indexed sender, address indexed underlying, address indexed currency, uint priceFloor, uint priceCap, address call, address put, int dCall, int dPut, int dUnd, int dCur);
+    event Swap(address indexed sender, address indexed underlying, address indexed currency, uint priceFloor, uint priceCap, int dCall, int dPut, int dUnd, int dCur, bytes data);
 
     function _swap2(address undFrom, address curFrom, address underlying, address currency, uint priceFloor, uint priceCap, int volCall, int volPut, int undMax, int curMax) internal returns (address call, address put, int dUnd, int dCur) {
         call = calls[underlying][currency][priceFloor][priceCap];
