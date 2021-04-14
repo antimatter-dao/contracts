@@ -1658,6 +1658,18 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         productImplementations[_Put_]  = implPut;
     }
     
+    function upgradeCallPut(address implCall, address implPut) external governance {
+        __ReentrancyGuard_init_unchained();
+        for(uint i=0; i<allCalls.length; i++) {
+            address call = allCalls[i];
+            address put  = allPuts [i];
+            Call(call).withdraw_(put,  IERC20(Call(call).underlying()).balanceOf(call));
+            Put( put ).withdraw_(call, IERC20(Put (put ).currency()  ).balanceOf(put ));
+        }
+        productImplementations[_Call_] = implCall;
+        productImplementations[_Put_]  = implPut;
+    }
+    
     function createOption(address underlying, address currency, uint priceFloor, uint priceCap) public returns (address call_, address put) {
         require(underlying != currency, 'IDENTICAL_ADDRESSES');
         require(underlying != address(0) && currency != address(0), 'ZERO_ADDRESS');
@@ -1768,17 +1780,17 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
             Put(put).mint_(sender, uint(dPut));
 
         if(dUnd < 0)
-            _transfer(sender, call, underlying, dUnd);
+            _transfer(sender, put, underlying, dUnd);
         if(dCur < 0)
-            _transfer(sender, put, currency, dCur);
+            _transfer(sender, call, currency, dCur);
         
         if(data.length > 0)
             IFlashSwapCallee(sender).onFlashSwap(sender, call, put, dCall, dPut, dUnd, dCur, data);
         
         if(dUnd > 0)
-            _transfer(sender, call, underlying, dUnd);
+            _transfer(sender, put, underlying, dUnd);
         if(dCur > 0)
-            _transfer(sender, put, currency, dCur);
+            _transfer(sender, call, currency, dCur);
         
         if(dCall < 0)
             Call(call).burn_(sender, uint(-dCall));
@@ -2001,7 +2013,7 @@ contract Call is ERC20UpgradeSafe {
     }
     
     function withdraw_(address to, uint volume) external onlyFactory {
-        IERC20(underlying).safeTransfer(to, volume);
+        IERC20(currency).safeTransfer(to, volume);
     }
 
     function mint_(address _to, uint volume) external onlyFactory {
@@ -2071,7 +2083,7 @@ contract Put is ERC20UpgradeSafe, Constants {
     }
     
     function withdraw_(address to, uint volume) external onlyFactory {
-        IERC20(currency).safeTransfer(to, volume);
+        IERC20(underlying).safeTransfer(to, volume);
     }
 
     function mint_(address _to, uint volume) external onlyFactory {
