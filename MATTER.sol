@@ -1062,7 +1062,7 @@ contract Timelock is Configurable {
 	uint public total;
 	
 	function start(address _token, address _recipient, uint _begin, uint _span, uint _times) external governance {
-		require(address(token) == address(0), 'already start');
+		//require(address(token) == address(0), 'already start');
 		token = IERC20(_token);
 		recipient = _recipient;
 		begin = _begin;
@@ -1092,6 +1092,26 @@ contract Timelock is Configurable {
 }
 
 
+contract Constants {
+    bytes32 internal constant _TokenMapped_     = 'TokenMapped';
+    bytes32 internal constant _MappableToken_   = 'MappableToken';
+    bytes32 internal constant _MappingToken_    = 'MappingToken';
+    bytes32 internal constant _fee_             = 'fee';
+    bytes32 internal constant _feeCreate_       = 'feeCreate';
+    bytes32 internal constant _feeRegister_     = 'feeRegister';
+    bytes32 internal constant _feeTo_           = 'feeTo';
+    bytes32 internal constant _onlyDeployer_    = 'onlyDeployer';
+    bytes32 internal constant _minSignatures_   = 'minSignatures';
+    bytes32 internal constant _initQuotaRatio_  = 'initQuotaRatio';
+    bytes32 internal constant _autoQuotaRatio_  = 'autoQuotaRatio';
+    bytes32 internal constant _autoQuotaPeriod_ = 'autoQuotaPeriod';
+    //bytes32 internal constant _uniswapRounter_  = 'uniswapRounter';
+    
+    function _chainId() internal pure returns (uint id) {
+        assembly { id := chainid() }
+    }
+}
+
 struct Signature {
     address signatory;
     uint8   v;
@@ -1099,146 +1119,147 @@ struct Signature {
     bytes32 s;
 }
 
-contract AuthQuota is Configurable {
-	using SafeMath for uint;
-
-    bytes32 internal constant _authQuota_       = 'authQuota';
+//contract AuthQuota is Configurable {
+//	using SafeMath for uint;
+//
+//    bytes32 internal constant _authQuota_       = 'authQuota';
+//    
+//    function authQuotaOf(address signatory) virtual public view returns (uint) {
+//        return getConfig(_authQuota_, signatory);
+//    }
+//    
+//    function increaseAuthQuota(address signatory, uint increment) virtual external governance returns (uint quota) {
+//        quota = getConfig(_authQuota_, signatory).add(increment);
+//        _setConfig(_authQuota_, signatory, quota);
+//        emit IncreaseAuthQuota(signatory, increment, quota);
+//    }
+//    event IncreaseAuthQuota(address indexed signatory, uint increment, uint quota);
+//    
+//    function decreaseAuthQuota(address signatory, uint decrement) virtual external governance returns (uint quota) {
+//        quota = getConfig(_authQuota_, signatory);
+//        if(quota < decrement)
+//            decrement = quota;
+//        return _decreaseAuthQuota(signatory, decrement);
+//    }
+//    
+//    function _decreaseAuthQuota(address signatory, uint decrement) virtual internal returns (uint quota) {
+//        quota = getConfig(_authQuota_, signatory).sub(decrement);
+//        _setConfig(_authQuota_, signatory, quota);
+//        emit DecreaseAuthQuota(signatory, decrement, quota);
+//    }
+//    event DecreaseAuthQuota(address indexed signatory, uint decrement, uint quota);
+//}    
     
-    function authQuotaOf(address signatory) virtual public view returns (uint) {
-        return getConfig(_authQuota_, signatory);
-    }
     
-    function increaseAuthQuota(address signatory, uint increment) virtual external governance returns (uint quota) {
-        quota = getConfig(_authQuota_, signatory).add(increment);
-        _setConfig(_authQuota_, signatory, quota);
-        emit IncreaseAuthQuota(signatory, increment, quota);
-    }
-    event IncreaseAuthQuota(address indexed signatory, uint increment, uint quota);
-    
-    function decreaseAuthQuota(address signatory, uint decrement) virtual external governance returns (uint quota) {
-        quota = getConfig(_authQuota_, signatory);
-        if(quota < decrement)
-            decrement = quota;
-        return _decreaseAuthQuota(signatory, decrement);
-    }
-    
-    function _decreaseAuthQuota(address signatory, uint decrement) virtual internal returns (uint quota) {
-        quota = getConfig(_authQuota_, signatory).sub(decrement);
-        _setConfig(_authQuota_, signatory, quota);
-        emit DecreaseAuthQuota(signatory, decrement, quota);
-    }
-    event DecreaseAuthQuota(address indexed signatory, uint decrement, uint quota);
-}    
-    
-    
-contract TokenMapped is ContextUpgradeSafe, AuthQuota {
-    using SafeERC20 for IERC20;
-    
-    bytes32 internal constant _minSignatures_   = 'minSignatures';
-    
-    bytes32 public constant RECEIVE_TYPEHASH = keccak256("Receive(uint256 fromChainId,address to,uint256 nonce,uint256 volume,address signatory)");
-    bytes32 public constant REDEEM_TYPEHASH = keccak256("Redeem(address authorizer,address to,uint256 volume,uint256 chainId,uint256 txHash)");
-    bytes32 public constant DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,uint256 chainId,address verifyingContract)");
-    bytes32 public DOMAIN_SEPARATOR;
-    mapping (uint => bool) public redeemed;
-    
-    address public token;
-    uint256 public mainChainId;
-    address public factory;
-    
-    mapping (uint => mapping (address => uint)) public sentCount;                       // toChainId => to => sentCount
-    mapping (uint => mapping (address => mapping (uint => uint))) public sent;          // toChainId => to => nonce => volume
-    mapping (uint => mapping (address => mapping (uint => uint))) public received;      // fromChainId => to => nonce => volume
-    
-	function __TokenMapped_init(address governor_, address token_) external initializer {
-        __Context_init_unchained();
-		__Governable_init_unchained(governor_);
-		__TokenMapped_init_unchained(token_);
-	}
-	
-	function __TokenMapped_init_unchained(address token_) public governance {
-        token = token_;
-        config[_minSignatures_] = 3;
-        
-        uint256 chainId;
-        assembly { chainId := chainid() }
-        mainChainId = chainId;
-        DOMAIN_SEPARATOR = keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256(bytes(ERC20UpgradeSafe(token).name())), chainId, address(this)));
-	}
-	
-    function totalMapped() virtual public view returns (uint) {
-        return IERC20(token).balanceOf(address(this));
-    }
-    
-    function needApprove() virtual public pure returns (bool) {
-        return true;
-    }
-    
-    function stake(uint volume, uint chainId, address to) virtual external {
-        IERC20(token).safeTransferFrom(_msgSender(), address(this), volume);
-        emit Stake(_msgSender(), volume, chainId, to);
-    }
-    event Stake(address indexed from, uint volume, uint indexed chainId, address indexed to);
-    
-    function send(uint toChainId, address to, uint volume) virtual external payable returns (uint nonce) {
-        return sendFrom(_msgSender(), toChainId, to, volume);
-    }
-    
-    function sendFrom(address from, uint toChainId, address to, uint volume) virtual public payable returns (uint nonce) {
-        IERC20(token).safeTransferFrom(from, address(this), volume);
-        nonce = sentCount[toChainId][to]++;
-        sent[toChainId][to][nonce] = volume;
-        emit Send(from, toChainId, to, nonce, volume);
-    }
-    event Send(address indexed from, uint indexed toChainId, address indexed to, uint nonce, uint volume);
-
-    function _redeem(address authorizer, address to, uint volume, uint chainId, uint txHash) virtual internal {
-        require(!redeemed[chainId ^ txHash], 'redeemed already');
-        redeemed[chainId ^ txHash] = true;
-        _decreaseAuthQuota(authorizer, volume);
-        IERC20(token).safeTransfer(to, volume);
-        emit Redeem(authorizer, to, volume, chainId, txHash);
-    }
-    event Redeem(address indexed signatory, address indexed to, uint volume, uint chainId, uint indexed txHash);
-    
-    function redeem(address to, uint volume, uint chainId, uint txHash) virtual external {
-        _redeem(_msgSender(), to, volume, chainId, txHash);
-    }
-    
-    function redeem(address authorizer, address to, uint256 volume, uint256 chainId, uint256 txHash, uint8 v, bytes32 r, bytes32 s) external virtual {
-        bytes32 structHash = keccak256(abi.encode(REDEEM_TYPEHASH, authorizer, to, volume, chainId, txHash));
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
-        address signatory = ecrecover(digest, v, r, s);
-        require(signatory != address(0), "invalid signature");
-        require(signatory == authorizer, "unauthorized");
-
-        _redeem(authorizer, to, volume, chainId, txHash);
-    }
-
-    function receive(uint256 fromChainId, address to, uint256 nonce, uint256 volume, Signature[] memory signatures) virtual external payable {
-        require(received[fromChainId][to][nonce] == 0, 'withdrawn already');
-        uint N = signatures.length;
-        require(N >= config[_minSignatures_], 'too few signatures');
-        for(uint i=0; i<N; i++) {
-            for(uint j=0; j<i; j++)
-                require(signatures[i].signatory != signatures[j].signatory, 'repetitive signatory');
-            bytes32 structHash = keccak256(abi.encode(RECEIVE_TYPEHASH, fromChainId, to, nonce, volume, signatures[i].signatory));
-            bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
-            address signatory = ecrecover(digest, signatures[i].v, signatures[i].r, signatures[i].s);
-            require(signatory != address(0), "invalid signature");
-            require(signatory == signatures[i].signatory, "unauthorized");
-            _decreaseAuthQuota(signatures[i].signatory, volume);
-            emit Authorize(fromChainId, to, nonce, volume, signatory);
-        }
-        received[fromChainId][to][nonce] = volume;
-        IERC20(token).safeTransfer(to, volume);
-        emit Receive(fromChainId, to, nonce, volume);
-    }
-    event Receive(uint256 indexed fromChainId, address indexed to, uint256 indexed nonce, uint256 volume);
-    event Authorize(uint256 fromChainId, address indexed to, uint256 indexed nonce, uint256 volume, address indexed signatory);
-
-    uint256[45] private __gap;
-}
+//contract TokenMapped is ContextUpgradeSafe, AuthQuota {
+//    using SafeERC20 for IERC20;
+//    
+//	address public constant deployer = address(0);
+//    bytes32 internal constant _minSignatures_   = 'minSignatures';
+//    
+//    bytes32 public constant RECEIVE_TYPEHASH = keccak256("Receive(uint256 fromChainId,address to,uint256 nonce,uint256 volume,address signatory)");
+//    //bytes32 public constant REDEEM_TYPEHASH = keccak256("Redeem(address authorizer,address to,uint256 volume,uint256 chainId,uint256 txHash)");
+//    bytes32 public constant DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,uint256 chainId,address verifyingContract)");
+//    bytes32 public DOMAIN_SEPARATOR;
+//    mapping (uint => bool) internal _redeemed;     // obsolete
+//    
+//    address public token;
+//    uint256 public mainChainId;
+//    address public factory;
+//    
+//    mapping (uint => mapping (address => uint)) public sentCount;                       // toChainId => to => sentCount
+//    mapping (uint => mapping (address => mapping (uint => uint))) public sent;          // toChainId => to => nonce => volume
+//    mapping (uint => mapping (address => mapping (uint => uint))) public received;      // fromChainId => to => nonce => volume
+//    
+//	function __TokenMapped_init(address governor_, address token_) external initializer {
+//        __Context_init_unchained();
+//		__Governable_init_unchained(governor_);
+//		__TokenMapped_init_unchained(token_);
+//	}
+//	
+//	function __TokenMapped_init_unchained(address token_) public governance {
+//        token = token_;
+//        config[_minSignatures_] = 3;
+//        
+//        uint256 chainId;
+//        assembly { chainId := chainid() }
+//        mainChainId = chainId;
+//        DOMAIN_SEPARATOR = keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256(bytes(ERC20UpgradeSafe(token).name())), chainId, address(this)));
+//	}
+//	
+//    function totalMapped() virtual public view returns (uint) {
+//        return IERC20(token).balanceOf(address(this));
+//    }
+//    
+//    function needApprove() virtual public pure returns (bool) {
+//        return true;
+//    }
+//    
+//    //function stake(uint volume, uint chainId, address to) virtual external {
+//    //    IERC20(token).safeTransferFrom(_msgSender(), address(this), volume);
+//    //    emit Stake(_msgSender(), volume, chainId, to);
+//    //}
+//    //event Stake(address indexed from, uint volume, uint indexed chainId, address indexed to);
+//    
+//    function send(uint toChainId, address to, uint volume) virtual external payable returns (uint nonce) {
+//        return sendFrom(_msgSender(), toChainId, to, volume);
+//    }
+//    
+//    function sendFrom(address from, uint toChainId, address to, uint volume) virtual public payable returns (uint nonce) {
+//        IERC20(token).safeTransferFrom(from, address(this), volume);
+//        nonce = sentCount[toChainId][to]++;
+//        sent[toChainId][to][nonce] = volume;
+//        emit Send(from, toChainId, to, nonce, volume);
+//    }
+//    event Send(address indexed from, uint indexed toChainId, address indexed to, uint nonce, uint volume);
+//
+//    //function _redeem(address authorizer, address to, uint volume, uint chainId, uint txHash) virtual internal {
+//    //    require(!redeemed[chainId ^ txHash], 'redeemed already');
+//    //    redeemed[chainId ^ txHash] = true;
+//    //    _decreaseAuthQuota(authorizer, volume);
+//    //    IERC20(token).safeTransfer(to, volume);
+//    //    emit Redeem(authorizer, to, volume, chainId, txHash);
+//    //}
+//    //event Redeem(address indexed signatory, address indexed to, uint volume, uint chainId, uint indexed txHash);
+//    //
+//    //function redeem(address to, uint volume, uint chainId, uint txHash) virtual external {
+//    //    _redeem(_msgSender(), to, volume, chainId, txHash);
+//    //}
+//    //
+//    //function redeem(address authorizer, address to, uint256 volume, uint256 chainId, uint256 txHash, uint8 v, bytes32 r, bytes32 s) external virtual {
+//    //    bytes32 structHash = keccak256(abi.encode(REDEEM_TYPEHASH, authorizer, to, volume, chainId, txHash));
+//    //    bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
+//    //    address signatory = ecrecover(digest, v, r, s);
+//    //    require(signatory != address(0), "invalid signature");
+//    //    require(signatory == authorizer, "unauthorized");
+//    //
+//    //    _redeem(authorizer, to, volume, chainId, txHash);
+//    //}
+//
+//    function receive(uint256 fromChainId, address to, uint256 nonce, uint256 volume, Signature[] memory signatures) virtual external payable {
+//        require(received[fromChainId][to][nonce] == 0, 'withdrawn already');
+//        uint N = signatures.length;
+//        require(N >= config[_minSignatures_], 'too few signatures');
+//        for(uint i=0; i<N; i++) {
+//            for(uint j=0; j<i; j++)
+//                require(signatures[i].signatory != signatures[j].signatory, 'repetitive signatory');
+//            bytes32 structHash = keccak256(abi.encode(RECEIVE_TYPEHASH, fromChainId, to, nonce, volume, signatures[i].signatory));
+//            bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
+//            address signatory = ecrecover(digest, signatures[i].v, signatures[i].r, signatures[i].s);
+//            require(signatory != address(0), "invalid signature");
+//            require(signatory == signatures[i].signatory, "unauthorized");
+//            _decreaseAuthQuota(signatures[i].signatory, volume);
+//            emit Authorize(fromChainId, to, nonce, volume, signatory);
+//        }
+//        received[fromChainId][to][nonce] = volume;
+//        IERC20(token).safeTransfer(to, volume);
+//        emit Receive(fromChainId, to, nonce, volume);
+//    }
+//    event Receive(uint256 indexed fromChainId, address indexed to, uint256 indexed nonce, uint256 volume);
+//    event Authorize(uint256 fromChainId, address indexed to, uint256 indexed nonce, uint256 volume, address indexed signatory);
+//
+//    uint256[45] private __gap;
+//}
 
 
 interface IPermit {
@@ -1246,17 +1267,18 @@ interface IPermit {
 }
 
 
-contract MappableToken is ERC20UpgradeSafe, AuthQuota, IPermit {
-    bytes32 internal constant _minSignatures_   = 'minSignatures';
-    
+//contract MappableToken is ERC20UpgradeSafe, AuthQuota, IPermit {
+contract MappableToken is ERC20UpgradeSafe, Configurable, IPermit, Constants {
+	address public constant deployer = 0x3D0A2a1ddeD59cC1cE1edF59295e1491748fD52B;
+
     // keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)");
     bytes32 public constant PERMIT_TYPEHASH = 0x6e71edae12b1b97f4d1f60370fef10105fa2faae0126114a169c64845d6126c9;
     bytes32 public constant RECEIVE_TYPEHASH = keccak256("Receive(uint256 fromChainId,address to,uint256 nonce,uint256 volume,address signatory)");
-    bytes32 public constant REDEEM_TYPEHASH = keccak256("Redeem(address authorizer,address to,uint256 volume,uint256 chainId,uint256 txHash)");
+    //bytes32 public constant REDEEM_TYPEHASH = keccak256("Redeem(address authorizer,address to,uint256 volume,uint256 chainId,uint256 txHash)");
     bytes32 public constant DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,uint256 chainId,address verifyingContract)");
     bytes32 public DOMAIN_SEPARATOR;
     mapping (address => uint) public nonces;
-    mapping (uint => bool) public redeemed;
+    mapping (uint => bool) internal _redeemed;     // obsolete
     
     address public token;
     uint256 public mainChainId;
@@ -1265,18 +1287,23 @@ contract MappableToken is ERC20UpgradeSafe, AuthQuota, IPermit {
     mapping (uint => mapping (address => uint)) public sentCount;                       // toChainId => to => sentCount
     mapping (uint => mapping (address => mapping (uint => uint))) public sent;          // toChainId => to => nonce => volume
     mapping (uint => mapping (address => mapping (uint => uint))) public received;      // fromChainId => to => nonce => volume
+    mapping (address => uint) internal _authQuotas;                                     // signatory => quota
+    mapping (address => uint) public lasttimeUpdateQuotaOf;                             // signatory => lasttime
+    uint public autoQuotaRatio;
+    uint public autoQuotaPeriod;
 
-	function __MappableToken_init(address governor_, string memory name_, string memory symbol_, uint8 decimals_) external initializer {
+	function __MappableToken_init(address governor_, address factory_, string memory name_, string memory symbol_, uint8 decimals_) external initializer {
         __Context_init_unchained();
 		__ERC20_init_unchained(name_, symbol_);
 		_setupDecimals(decimals_);
 		__Governable_init_unchained(governor_);
-		__MappableToken_init_unchained();
+		__MappableToken_init_unchained(factory_);
 	}
 	
-	function __MappableToken_init_unchained() public governance {
+	function __MappableToken_init_unchained(address factory_) public governance {
+        factory = factory_;
         token = address(0);
-        config[_minSignatures_] = 1;
+        config[_minSignatures_] = 3;
         
         uint256 chainId;
         assembly { chainId := chainid() }
@@ -1284,6 +1311,75 @@ contract MappableToken is ERC20UpgradeSafe, AuthQuota, IPermit {
         DOMAIN_SEPARATOR = keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256(bytes(name())), chainId, address(this)));
 	}
 	
+    function setAutoQuota(uint ratio, uint period) virtual external onlyFactory {
+        autoQuotaRatio  = ratio;
+        autoQuotaPeriod = period;
+    }
+    
+    modifier onlyFactory {
+        require(msg.sender == factory, 'Only called by Factory');
+        _;
+    }
+    
+    modifier updateAutoQuota(address signatory) virtual {
+        uint quota = authQuotaOf(signatory);
+        if(_authQuotas[signatory] != quota) {
+            _authQuotas[signatory] = quota;
+            lasttimeUpdateQuotaOf[signatory] = now;
+        }
+        _;
+    }
+    
+    function authQuotaOf(address signatory) virtual public view returns (uint quota) {
+        quota = _authQuotas[signatory];
+        uint ratio  = autoQuotaRatio  != 0 ? autoQuotaRatio  : Configurable(factory).getConfig(_autoQuotaRatio_);
+        uint period = autoQuotaPeriod != 0 ? autoQuotaPeriod : Configurable(factory).getConfig(_autoQuotaPeriod_);
+        if(ratio == 0 || period == 0 || period == uint(-1))
+            return quota;
+        uint quotaCap = cap().mul(ratio).div(1e18);
+        uint delta = quotaCap.mul(now.sub(lasttimeUpdateQuotaOf[signatory])).div(period);
+        return Math.max(quota, Math.min(quotaCap, quota.add(delta)));
+    }
+    
+    function increaseAuthQuotas(address[] memory signatories, uint[] memory increments) virtual external returns (uint[] memory quotas) {
+        require(signatories.length == increments.length, 'two array lenth not equal');
+        quotas = new uint[](signatories.length);
+        for(uint i=0; i<signatories.length; i++)
+            quotas[i] = increaseAuthQuota(signatories[i], increments[i]);
+    }
+    
+    function increaseAuthQuota(address signatory, uint increment) virtual public updateAutoQuota(signatory) onlyFactory returns (uint quota) {
+        quota = _authQuotas[signatory].add(increment);
+        _authQuotas[signatory] = quota;
+        emit IncreaseAuthQuota(signatory, increment, quota);
+    }
+    event IncreaseAuthQuota(address indexed signatory, uint increment, uint quota);
+    
+    function decreaseAuthQuotas(address[] memory signatories, uint[] memory decrements) virtual external returns (uint[] memory quotas) {
+        require(signatories.length == decrements.length, 'two array lenth not equal');
+        quotas = new uint[](signatories.length);
+        for(uint i=0; i<signatories.length; i++)
+            quotas[i] = decreaseAuthQuota(signatories[i], decrements[i]);
+    }
+    
+    function decreaseAuthQuota(address signatory, uint decrement) virtual public onlyFactory returns (uint quota) {
+        quota = authQuotaOf(signatory);
+        if(quota < decrement)
+            decrement = quota;
+        return _decreaseAuthQuota(signatory, decrement);
+    }
+    
+    function _decreaseAuthQuota(address signatory, uint decrement) virtual internal updateAutoQuota(signatory) returns (uint quota) {
+        quota = _authQuotas[signatory].sub(decrement);
+        _authQuotas[signatory] = quota;
+        emit DecreaseAuthQuota(signatory, decrement, quota);
+    }
+    event DecreaseAuthQuota(address indexed signatory, uint decrement, uint quota);
+    
+    function cap() public view virtual returns (uint) {
+        return totalSupply();
+    }
+
     function totalMapped() virtual public view returns (uint) {
         return balanceOf(address(this));
     }
@@ -1292,11 +1388,11 @@ contract MappableToken is ERC20UpgradeSafe, AuthQuota, IPermit {
         return false;
     }
     
-    function stake(uint volume, uint chainId, address to) virtual external {
-        _transfer(_msgSender(), address(this), volume);
-        emit Stake(_msgSender(), volume, chainId, to);
-    }
-    event Stake(address indexed from, uint volume, uint indexed chainId, address indexed to);
+    //function stake(uint volume, uint chainId, address to) virtual external {
+    //    _transfer(_msgSender(), address(this), volume);
+    //    emit Stake(_msgSender(), volume, chainId, to);
+    //}
+    //event Stake(address indexed from, uint volume, uint indexed chainId, address indexed to);
     
     function send(uint toChainId, address to, uint volume) virtual external payable returns (uint nonce) {
         return sendFrom(_msgSender(), toChainId, to, volume);
@@ -1310,28 +1406,28 @@ contract MappableToken is ERC20UpgradeSafe, AuthQuota, IPermit {
     }
     event Send(address indexed from, uint indexed toChainId, address indexed to, uint nonce, uint volume);
 
-    function _redeem(address authorizer, address to, uint volume, uint chainId, uint txHash) virtual internal {
-        require(!redeemed[chainId ^ txHash], 'redeemed already');
-        redeemed[chainId ^ txHash] = true;
-        _decreaseAuthQuota(authorizer, volume);
-        _transfer(address(this), to, volume);
-        emit Redeem(authorizer, to, volume, chainId, txHash);
-    }
-    event Redeem(address indexed signatory, address indexed to, uint volume, uint chainId, uint indexed txHash);
-    
-    function redeem(address to, uint volume, uint chainId, uint txHash) virtual external {
-        _redeem(_msgSender(), to, volume, chainId, txHash);
-    }
-    
-    function redeem(address authorizer, address to, uint256 volume, uint256 chainId, uint256 txHash, uint8 v, bytes32 r, bytes32 s) external virtual {
-        bytes32 structHash = keccak256(abi.encode(REDEEM_TYPEHASH, authorizer, to, volume, chainId, txHash));
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
-        address signatory = ecrecover(digest, v, r, s);
-        require(signatory != address(0), "invalid signature");
-        require(signatory == authorizer, "unauthorized");
-
-        _redeem(authorizer, to, volume, chainId, txHash);
-    }
+    //function _redeem(address authorizer, address to, uint volume, uint chainId, uint txHash) virtual internal {
+    //    require(!redeemed[chainId ^ txHash], 'redeemed already');
+    //    redeemed[chainId ^ txHash] = true;
+    //    _decreaseAuthQuota(authorizer, volume);
+    //    _transfer(address(this), to, volume);
+    //    emit Redeem(authorizer, to, volume, chainId, txHash);
+    //}
+    //event Redeem(address indexed signatory, address indexed to, uint volume, uint chainId, uint indexed txHash);
+    //
+    //function redeem(address to, uint volume, uint chainId, uint txHash) virtual external {
+    //    _redeem(_msgSender(), to, volume, chainId, txHash);
+    //}
+    //
+    //function redeem(address authorizer, address to, uint256 volume, uint256 chainId, uint256 txHash, uint8 v, bytes32 r, bytes32 s) external virtual {
+    //    bytes32 structHash = keccak256(abi.encode(REDEEM_TYPEHASH, authorizer, to, volume, chainId, txHash));
+    //    bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
+    //    address signatory = ecrecover(digest, v, r, s);
+    //    require(signatory != address(0), "invalid signature");
+    //    require(signatory == authorizer, "unauthorized");
+    //
+    //    _redeem(authorizer, to, volume, chainId, txHash);
+    //}
     
     function receive(uint256 fromChainId, address to, uint256 nonce, uint256 volume, Signature[] memory signatures) virtual external payable {
         require(received[fromChainId][to][nonce] == 0, 'withdrawn already');
@@ -1369,19 +1465,20 @@ contract MappableToken is ERC20UpgradeSafe, AuthQuota, IPermit {
         _approve(owner, spender, value);
     }
     
-    uint256[45] private __gap;
+    uint256[41] private __gap;
 }
 
 
-contract MappingToken is ERC20CappedUpgradeSafe, AuthQuota, IPermit {
-    bytes32 internal constant _minSignatures_   = 'minSignatures';
-    
+//contract MappingToken is ERC20CappedUpgradeSafe, AuthQuota, IPermit {
+contract MappingToken is ERC20CappedUpgradeSafe, Configurable, IPermit, Constants {
+	address public constant deployer = address(0);
+
     bytes32 public constant RECEIVE_TYPEHASH = keccak256("Receive(uint256 fromChainId,address to,uint256 nonce,uint256 volume,address signatory)");
-    bytes32 public constant MINT_TYPEHASH   = keccak256("Mint(address authorizer,address to,uint256 volume,uint256 chainId,uint256 txHash)");
+    //bytes32 public constant MINT_TYPEHASH   = keccak256("Mint(address authorizer,address to,uint256 volume,uint256 chainId,uint256 txHash)");
     bytes32 public constant DOMAIN_TYPEHASH = keccak256("EIP712Domain(string name,uint256 chainId,address verifyingContract)");
     bytes32 public DOMAIN_SEPARATOR;
     mapping (address => uint) public nonces;
-    mapping (uint => bool) public minted;
+    mapping (uint => bool) internal _minted;       // obsolete
 
     address public token;
     uint256 public mainChainId;
@@ -1390,57 +1487,127 @@ contract MappingToken is ERC20CappedUpgradeSafe, AuthQuota, IPermit {
     mapping (uint => mapping (address => uint)) public sentCount;                       // toChainId => to => sentCount
     mapping (uint => mapping (address => mapping (uint => uint))) public sent;          // toChainId => to => nonce => volume
     mapping (uint => mapping (address => mapping (uint => uint))) public received;      // fromChainId => to => nonce => volume
+    mapping (address => uint) internal _authQuotas;                                     // signatory => quota
+    mapping (address => uint) public lasttimeUpdateQuotaOf;                             // signatory => lasttime
+    uint public autoQuotaRatio;
+    uint public autoQuotaPeriod;
 
-	function __MappingToken_init(address governor_, uint mainChainId_, address token_, string memory name_, string memory symbol_, uint cap_) external initializer {
+	function __MappingToken_init(address governor_, address factory_, uint mainChainId_, address token_, string memory name_, string memory symbol_, uint cap_) external initializer {
         __Context_init_unchained();
 		__ERC20_init_unchained(name_, symbol_);
 		__ERC20Capped_init_unchained(cap_);
 		__Governable_init_unchained(governor_);
-		__MappingToken_init_unchained(mainChainId_, token_);
+		__MappingToken_init_unchained(factory_, mainChainId_, token_);
 	}
 	
-	function __MappingToken_init_unchained(uint mainChainId_, address token_) public governance {
+	function __MappingToken_init_unchained(address factory_, uint mainChainId_, address token_) public governance {
+        factory = factory_;
         mainChainId = mainChainId_;
         token = token_;
-        config[_minSignatures_] = 1;
+        config[_minSignatures_] = 3;
         
         uint256 chainId;
         assembly { chainId := chainid() }
         DOMAIN_SEPARATOR = keccak256(abi.encode(DOMAIN_TYPEHASH, keccak256(bytes(name())), chainId, address(this)));
 	}
 	
+    function setAutoQuota(uint ratio, uint period) virtual external onlyFactory {
+        autoQuotaRatio  = ratio;
+        autoQuotaPeriod = period;
+    }
+    
+    modifier onlyFactory {
+        require(msg.sender == factory, 'Only called by Factory');
+        _;
+    }
+    
+    modifier updateAutoQuota(address signatory) virtual {
+        uint quota = authQuotaOf(signatory);
+        if(_authQuotas[signatory] != quota) {
+            _authQuotas[signatory] = quota;
+            lasttimeUpdateQuotaOf[signatory] = now;
+        }
+        _;
+    }
+    
+    function authQuotaOf(address signatory) virtual public view returns (uint quota) {
+        quota = _authQuotas[signatory];
+        uint ratio  = autoQuotaRatio  != 0 ? autoQuotaRatio  : Configurable(factory).getConfig(_autoQuotaRatio_);
+        uint period = autoQuotaPeriod != 0 ? autoQuotaPeriod : Configurable(factory).getConfig(_autoQuotaPeriod_);
+        if(ratio == 0 || period == 0 || period == uint(-1))
+            return quota;
+        uint quotaCap = cap().mul(ratio).div(1e18);
+        uint delta = quotaCap.mul(now.sub(lasttimeUpdateQuotaOf[signatory])).div(period);
+        return Math.max(quota, Math.min(quotaCap, quota.add(delta)));
+    }
+    
+    function increaseAuthQuotas(address[] memory signatories, uint[] memory increments) virtual external returns (uint[] memory quotas) {
+        require(signatories.length == increments.length, 'two array lenth not equal');
+        quotas = new uint[](signatories.length);
+        for(uint i=0; i<signatories.length; i++)
+            quotas[i] = increaseAuthQuota(signatories[i], increments[i]);
+    }
+    
+    function increaseAuthQuota(address signatory, uint increment) virtual public updateAutoQuota(signatory) onlyFactory returns (uint quota) {
+        quota = _authQuotas[signatory].add(increment);
+        _authQuotas[signatory] = quota;
+        emit IncreaseAuthQuota(signatory, increment, quota);
+    }
+    event IncreaseAuthQuota(address indexed signatory, uint increment, uint quota);
+    
+    function decreaseAuthQuotas(address[] memory signatories, uint[] memory decrements) virtual external returns (uint[] memory quotas) {
+        require(signatories.length == decrements.length, 'two array lenth not equal');
+        quotas = new uint[](signatories.length);
+        for(uint i=0; i<signatories.length; i++)
+            quotas[i] = decreaseAuthQuota(signatories[i], decrements[i]);
+    }
+    
+    function decreaseAuthQuota(address signatory, uint decrement) virtual public onlyFactory returns (uint quota) {
+        quota = authQuotaOf(signatory);
+        if(quota < decrement)
+            decrement = quota;
+        return _decreaseAuthQuota(signatory, decrement);
+    }
+    
+    function _decreaseAuthQuota(address signatory, uint decrement) virtual internal updateAutoQuota(signatory) returns (uint quota) {
+        quota = _authQuotas[signatory].sub(decrement);
+        _authQuotas[signatory] = quota;
+        emit DecreaseAuthQuota(signatory, decrement, quota);
+    }
+    event DecreaseAuthQuota(address indexed signatory, uint decrement, uint quota);
+    
     function needApprove() virtual public pure returns (bool) {
         return false;
     }
     
-    function _mint(address authorizer, address to, uint volume, uint chainId, uint txHash) virtual internal {
-        require(!minted[chainId ^ txHash], 'minted already');
-        minted[chainId ^ txHash] = true;
-        _decreaseAuthQuota(authorizer, volume);
-        _mint(to, volume);
-        emit Mint(authorizer, to, volume, chainId, txHash);
-    }
-    event Mint(address indexed signatory, address indexed to, uint volume, uint chainId, uint indexed txHash);
-    
-    function mint(address to, uint volume, uint chainId, uint txHash) virtual external {
-        _mint(_msgSender(), to, volume, chainId, txHash);
-    }
-    
-    function mint(address authorizer, address to, uint256 volume, uint256 chainId, uint256 txHash, uint8 v, bytes32 r, bytes32 s) external virtual {
-        bytes32 structHash = keccak256(abi.encode(MINT_TYPEHASH, authorizer, to, volume, chainId, txHash));
-        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
-        address signatory = ecrecover(digest, v, r, s);
-        require(signatory != address(0), "invalid signature");
-        require(signatory == authorizer, "unauthorized");
-
-        _mint(authorizer, to, volume, chainId, txHash);
-    }
-
-    function burn(uint volume, uint chainId, address to) virtual external {
-        _burn(_msgSender(), volume);
-        emit Burn(_msgSender(), volume, chainId, to);
-    }
-    event Burn(address indexed from, uint volume, uint indexed chainId, address indexed to);
+    //function _mint(address authorizer, address to, uint volume, uint chainId, uint txHash) virtual internal {
+    //    require(!minted[chainId ^ txHash], 'minted already');
+    //    minted[chainId ^ txHash] = true;
+    //    _decreaseAuthQuota(authorizer, volume);
+    //    _mint(to, volume);
+    //    emit Mint(authorizer, to, volume, chainId, txHash);
+    //}
+    //event Mint(address indexed signatory, address indexed to, uint volume, uint chainId, uint indexed txHash);
+    //
+    //function mint(address to, uint volume, uint chainId, uint txHash) virtual external {
+    //    _mint(_msgSender(), to, volume, chainId, txHash);
+    //}
+    //
+    //function mint(address authorizer, address to, uint256 volume, uint256 chainId, uint256 txHash, uint8 v, bytes32 r, bytes32 s) external virtual {
+    //    bytes32 structHash = keccak256(abi.encode(MINT_TYPEHASH, authorizer, to, volume, chainId, txHash));
+    //    bytes32 digest = keccak256(abi.encodePacked("\x19\x01", DOMAIN_SEPARATOR, structHash));
+    //    address signatory = ecrecover(digest, v, r, s);
+    //    require(signatory != address(0), "invalid signature");
+    //    require(signatory == authorizer, "unauthorized");
+    //
+    //    _mint(authorizer, to, volume, chainId, txHash);
+    //}
+    //
+    //function burn(uint volume, uint chainId, address to) virtual external {
+    //    _burn(_msgSender(), volume);
+    //    emit Burn(_msgSender(), volume, chainId, to);
+    //}
+    //event Burn(address indexed from, uint volume, uint indexed chainId, address indexed to);
     
     function send(uint toChainId, address to, uint volume) virtual external payable returns (uint nonce) {
         return sendFrom(_msgSender(), toChainId, to, volume);
@@ -1495,17 +1662,17 @@ contract MappingToken is ERC20CappedUpgradeSafe, AuthQuota, IPermit {
         _approve(owner, spender, value);
     }
 
-    uint256[44] private __gap;
+    uint256[40] private __gap;
 }
 
 
 contract MappingMATTER is MappingToken {
-	function __MappingMATTER_init(address governor_) external initializer {
+	function __MappingMATTER_init(address governor_, address factory_) external initializer {
         __Context_init_unchained();
 		__ERC20_init_unchained("Antimatter.Finance Mapping Token", "MATTER");
 		__ERC20Capped_init_unchained(100_000_000);
 		__Governable_init_unchained(governor_);
-		__MappingToken_init_unchained(1, address(this));
+		__MappingToken_init_unchained(factory_, 1, address(this));
 		__MappingMATTER_init_unchained();
 	}
 	
@@ -1515,11 +1682,11 @@ contract MappingMATTER is MappingToken {
 
 
 contract MATTER is MappableToken {
-	function __MATTER_init(address governor_, address offering_, address public_, address team_, address fund_, address mine_, address liquidity_) external initializer {
+	function __MATTER_init(address governor_, address factory_, address offering_, address public_, address team_, address fund_, address mine_, address liquidity_) external initializer {
         __Context_init_unchained();
 		__ERC20_init_unchained("Antimatter.Finance Governance Token", "MATTER");
 		__Governable_init_unchained(governor_);
-		__MappableToken_init_unchained();
+		__MappableToken_init_unchained(factory_);
 		__MATTER_init_unchained(offering_, public_, team_, fund_, mine_, liquidity_);
 	}
 	
