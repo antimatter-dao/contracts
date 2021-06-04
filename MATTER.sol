@@ -848,6 +848,9 @@ library SafeERC20 {
 
 
 contract Governable is Initializable {
+    // bytes32(uint256(keccak256('eip1967.proxy.admin')) - 1)
+    bytes32 internal constant ADMIN_SLOT = 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103;
+
     address public governor;
 
     event GovernorshipTransferred(address indexed previousGovernor, address indexed newGovernor);
@@ -861,8 +864,15 @@ contract Governable is Initializable {
         emit GovernorshipTransferred(address(0), governor);
     }
 
+    function _admin() internal view returns (address adm) {
+        bytes32 slot = ADMIN_SLOT;
+        assembly {
+            adm := sload(slot)
+        }
+    }
+    
     modifier governance() {
-        require(msg.sender == governor);
+        require(msg.sender == governor || msg.sender == _admin());
         _;
     }
 
@@ -904,10 +914,10 @@ contract Configurable is Governable {
     function getConfig(bytes32 key) public view returns (uint) {
         return config[key];
     }
-    function getConfig(bytes32 key, uint index) public view returns (uint) {
+    function getConfigI(bytes32 key, uint index) public view returns (uint) {
         return config[bytes32(uint(key) ^ index)];
     }
-    function getConfig(bytes32 key, address addr) public view returns (uint) {
+    function getConfigA(bytes32 key, address addr) public view returns (uint) {
         return config[bytes32(uint(key) ^ uint(addr))];
     }
 
@@ -925,10 +935,10 @@ contract Configurable is Governable {
     function setConfig(bytes32 key, uint value) external governance {
         _setConfig(key, value);
     }
-    function setConfig(bytes32 key, uint index, uint value) external governance {
+    function setConfigI(bytes32 key, uint index, uint value) external governance {
         _setConfig(bytes32(uint(key) ^ index), value);
     }
-    function setConfig(bytes32 key, address addr, uint value) public governance {
+    function setConfigA(bytes32 key, address addr, uint value) public governance {
         _setConfig(bytes32(uint(key) ^ uint(addr)), value);
     }
 }
@@ -974,14 +984,14 @@ contract Offering is Configurable {
 	}
 	
     function setQuota(address addr, uint amount, bool isSeed) public governance {
-        uint oldVol = getConfig(_quota_, addr).mul(getConfig(_ratio_, getConfig(_isSeed_, addr)));
+        uint oldVol = getConfigA(_quota_, addr).mul(getConfigI(_ratio_, getConfigA(_isSeed_, addr)));
         
         _setConfig(_quota_, addr, amount);
         if(isSeed)
             _setConfig(_isSeed_, addr, 1);
             
-        uint volume = amount.mul(getConfig(_ratio_, isSeed ? 1 : 0));
-        uint totalVolume = getConfig(_volume_, address(0)).add(volume).sub(oldVol);
+        uint volume = amount.mul(getConfigI(_ratio_, isSeed ? 1 : 0));
+        uint totalVolume = getConfigA(_volume_, address(0)).add(volume).sub(oldVol);
         require(totalVolume <= token.balanceOf(address(this)), 'out of quota');
         _setConfig(_volume_, address(0), totalVolume);
     }
@@ -992,37 +1002,48 @@ contract Offering is Configurable {
     }
     
     function getQuota(address addr) public view returns (uint) {
-        return getConfig(_quota_, addr);
+        return getConfigA(_quota_, addr);
     }
 
 	function offer() external {
-		require(now >= getConfig(_time_, _timeOfferBegin_), 'Not begin');
-		if(now > getConfig(_time_, _timeOfferEnd_))                                                 // todo timeOfferEnd should be -1
+		require(now >= getConfigI(_time_, _timeOfferBegin_), 'Not begin');
+		if(now > getConfigI(_time_, _timeOfferEnd_))                                                 // todo timeOfferEnd should be -1
 			if(token.balanceOf(address(this)) > 0)
 				token.safeTransfer(address(config[_public_]), token.balanceOf(address(this)));
 			else
 				revert('offer over');
-		uint quota = getConfig(_quota_, msg.sender);
+		uint quota = getConfigA(_quota_, msg.sender);
 		require(quota > 0, 'no quota');
 		require(currency.allowance(msg.sender, address(this)) >= quota, 'allowance not enough');
 		require(currency.balanceOf(msg.sender) >= quota, 'balance not enough');
-		require(getConfig(_volume_, msg.sender) == 0, 'offered already');
+		require(getConfigA(_volume_, msg.sender) == 0, 'offered already');
 		
 		currency.safeTransferFrom(msg.sender, address(config[_recipient_]), quota);
-		_setConfig(_volume_, msg.sender, quota.mul(getConfig(_ratio_, getConfig(_isSeed_, msg.sender))));
+		_setConfig(_volume_, msg.sender, quota.mul(getConfigI(_ratio_, getConfigA(_isSeed_, msg.sender))));
 	}
 	
+    function setVolumes(address[] memory addrs, uint[] memory volumes) public governance {
+        require(addrs.length == volumes.length, 'two array.length should be equal');
+        uint totalVolume = getConfigA(_volume_, address(0));
+        for(uint i=0; i<addrs.length; i++) {
+            totalVolume = totalVolume.add(volumes[i]).sub(getConfigA(_volume_, addrs[i]));
+            _setConfig(_volume_, addrs[i], volumes[i]);
+        }
+        require(totalVolume <= token.balanceOf(address(this)), 'out of volume');
+        _setConfig(_volume_, address(0), totalVolume);
+    }
+    
 	function getVolume(address addr) public view returns (uint) {
-	    return getConfig(_volume_, addr);
+	    return getConfigA(_volume_, addr);
 	}
 	
     function unlockCapacity(address addr) public view returns (uint c) {
-        uint timeUnlockFirst    = getConfig(_time_, _timeUnlockFirst_);
+        uint timeUnlockFirst    = getConfigI(_time_, _timeUnlockFirst_);
         if(timeUnlockFirst == 0 || now < timeUnlockFirst)
             return 0;
-        uint timeUnlockBegin    = getConfig(_time_, _timeUnlockBegin_);
-        uint timeUnlockEnd      = getConfig(_time_, _timeUnlockEnd_);
-        uint volume             = getConfig(_volume_, addr);
+        uint timeUnlockBegin    = getConfigI(_time_, _timeUnlockBegin_);
+        uint timeUnlockEnd      = getConfigI(_time_, _timeUnlockEnd_);
+        uint volume             = getConfigA(_volume_, addr);
         uint ratioUnlockFirst   = getConfig(_ratioUnlockFirst_);
 
         c = volume.mul(ratioUnlockFirst).div(1e18);
@@ -1030,18 +1051,18 @@ contract Offering is Configurable {
             c = volume;
         else if(now > timeUnlockBegin)
             c = volume.sub(c).mul(now.sub(timeUnlockBegin)).div(timeUnlockEnd.sub(timeUnlockBegin)).add(c);
-        return c.sub(getConfig(_unlocked_, addr));
+        return c.sub(getConfigA(_unlocked_, addr));
     }
     
     function unlock() public {
         uint c = unlockCapacity(msg.sender);
-        _setConfig(_unlocked_, msg.sender, getConfig(_unlocked_, msg.sender).add(c));
-        _setConfig(_unlocked_, address(0), getConfig(_unlocked_, address(0)).add(c));
+        _setConfig(_unlocked_, msg.sender, getConfigA(_unlocked_, msg.sender).add(c));
+        _setConfig(_unlocked_, address(0), getConfigA(_unlocked_, address(0)).add(c));
         token.safeTransfer(msg.sender, c);
     }
     
     function unlocked(address addr) public view returns (uint) {
-        return getConfig(_unlocked_, addr);
+        return getConfigA(_unlocked_, addr);
     }
     
     fallback() external {
