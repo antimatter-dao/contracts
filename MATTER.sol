@@ -1046,7 +1046,8 @@ contract Offering is Configurable {
         uint volume             = getConfigA(_volume_, addr);
         uint ratioUnlockFirst   = getConfig(_ratioUnlockFirst_);
 
-        c = volume.mul(ratioUnlockFirst).div(1e18);
+        //c = volume.mul(ratioUnlockFirst).div(1e18);
+        c = getConfigA(_quota_, addr).mul(getConfigI(_ratio_, getConfigA(_isSeed_, addr))).mul(ratioUnlockFirst).div(1e18);
         if(now >= timeUnlockEnd)
             c = volume;
         else if(now > timeUnlockBegin)
