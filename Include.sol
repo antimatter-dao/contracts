@@ -572,7 +572,7 @@ contract ProductProxy is Proxy {
    * @param newFactory Address of the new factory.
    */
   function _setFactory(address newFactory) internal {
-    require(OpenZeppelinUpgradesAddress.isContract(newFactory), "Cannot set a factory to a non-contract address");
+    require(newFactory == address(0) || OpenZeppelinUpgradesAddress.isContract(newFactory), "Cannot set a factory to a non-contract address");
 
     bytes32 slot = FACTORY_SLOT;
 
