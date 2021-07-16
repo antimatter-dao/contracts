@@ -21,3 +21,47 @@ contract MATTER2 is PermitERC20UpgradeSafe {
 		_mint(liquidity_,    5_000_000 * 10 ** uint256(decimals()));
 	}
 }
+
+
+contract Timelock is Configurable {
+	using SafeMath for uint;
+	using SafeERC20 for IERC20;
+	
+	IERC20 public token;
+	address public recipient;
+	uint public begin;
+	uint public span;
+	uint public times;
+	uint public total;
+	
+	function start(address _token, address _recipient, uint _begin, uint _span, uint _times) external governance {
+		//require(address(token) == address(0), 'already start');
+		token = IERC20(_token);
+		recipient = _recipient;
+		begin = _begin;
+		span = _span;
+		times = _times;
+		total = token.balanceOf(address(this));
+	}
+
+    function unlockCapacity() public view returns (uint) {
+       if(begin == 0 || now < begin)
+            return 0;
+            
+        for(uint i=1; i<=times; i++)
+            if(now < span.mul(i).div(times).add(begin))
+                return token.balanceOf(address(this)).sub(total.mul(times.sub(i)).div(times));
+                
+        return token.balanceOf(address(this));
+    }
+    
+    function unlock() public {
+        token.safeTransfer(recipient, unlockCapacity());
+    }
+    
+    fallback() external {
+        unlock();
+    }
+}
+
+
