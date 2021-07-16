@@ -388,6 +388,658 @@ library SafeERC20 {
 
 
 /**
+ * @title Proxy
+ * @dev Implements delegation of calls to other contracts, with proper
+ * forwarding of return values and bubbling of failures.
+ * It defines a fallback function that delegates all calls to the address
+ * returned by the abstract _implementation() internal function.
+ */
+abstract contract Proxy {
+  /**
+   * @dev Fallback function.
+   * Implemented entirely in `_fallback`.
+   */
+  fallback () payable external {
+    _fallback();
+  }
+  
+  receive () payable external {
+    _fallback();
+  }
+
+  /**
+   * @return The Address of the implementation.
+   */
+  function _implementation() virtual internal view returns (address);
+
+  /**
+   * @dev Delegates execution to an implementation contract.
+   * This is a low level function that doesn't return to its internal call site.
+   * It will return to the external caller whatever the implementation returns.
+   * @param implementation Address to delegate.
+   */
+  function _delegate(address implementation) internal {
+    assembly {
+      // Copy msg.data. We take full control of memory in this inline assembly
+      // block because it will not return to Solidity code. We overwrite the
+      // Solidity scratch pad at memory position 0.
+      calldatacopy(0, 0, calldatasize())
+
+      // Call the implementation.
+      // out and outsize are 0 because we don't know the size yet.
+      let result := delegatecall(gas(), implementation, 0, calldatasize(), 0, 0)
+
+      // Copy the returned data.
+      returndatacopy(0, 0, returndatasize())
+
+      switch result
+      // delegatecall returns 0 on error.
+      case 0 { revert(0, returndatasize()) }
+      default { return(0, returndatasize()) }
+    }
+  }
+
+  /**
+   * @dev Function that is run as the first thing in the fallback function.
+   * Can be redefined in derived contracts to add functionality.
+   * Redefinitions must call super._willFallback().
+   */
+  function _willFallback() virtual internal {
+      
+  }
+
+  /**
+   * @dev fallback implementation.
+   * Extracted to enable manual triggering.
+   */
+  function _fallback() internal {
+    if(OpenZeppelinUpgradesAddress.isContract(msg.sender) && msg.data.length == 0 && gasleft() <= 2300)         // for receive ETH only from other contract
+        return;
+    _willFallback();
+    _delegate(_implementation());
+  }
+}
+
+
+/**
+ * @title BaseUpgradeabilityProxy
+ * @dev This contract implements a proxy that allows to change the
+ * implementation address to which it will delegate.
+ * Such a change is called an implementation upgrade.
+ */
+abstract contract BaseUpgradeabilityProxy is Proxy {
+  /**
+   * @dev Emitted when the implementation is upgraded.
+   * @param implementation Address of the new implementation.
+   */
+  event Upgraded(address indexed implementation);
+
+  /**
+   * @dev Storage slot with the address of the current implementation.
+   * This is the keccak-256 hash of "eip1967.proxy.implementation" subtracted by 1, and is
+   * validated in the constructor.
+   */
+  bytes32 internal constant IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
+
+  /**
+   * @dev Returns the current implementation.
+   * @return impl Address of the current implementation
+   */
+  function _implementation() override internal view returns (address impl) {
+    bytes32 slot = IMPLEMENTATION_SLOT;
+    assembly {
+      impl := sload(slot)
+    }
+  }
+
+  /**
+   * @dev Upgrades the proxy to a new implementation.
+   * @param newImplementation Address of the new implementation.
+   */
+  function _upgradeTo(address newImplementation) internal {
+    _setImplementation(newImplementation);
+    emit Upgraded(newImplementation);
+  }
+
+  /**
+   * @dev Sets the implementation address of the proxy.
+   * @param newImplementation Address of the new implementation.
+   */
+  function _setImplementation(address newImplementation) internal {
+    require(OpenZeppelinUpgradesAddress.isContract(newImplementation), "Cannot set a proxy implementation to a non-contract address");
+
+    bytes32 slot = IMPLEMENTATION_SLOT;
+
+    assembly {
+      sstore(slot, newImplementation)
+    }
+  }
+}
+
+
+/**
+ * @title BaseAdminUpgradeabilityProxy
+ * @dev This contract combines an upgradeability proxy with an authorization
+ * mechanism for administrative tasks.
+ * All external functions in this contract must be guarded by the
+ * `ifAdmin` modifier. See ethereum/solidity#3864 for a Solidity
+ * feature proposal that would enable this to be done automatically.
+ */
+contract BaseAdminUpgradeabilityProxy is BaseUpgradeabilityProxy {
+  /**
+   * @dev Emitted when the administration has been transferred.
+   * @param previousAdmin Address of the previous admin.
+   * @param newAdmin Address of the new admin.
+   */
+  event AdminChanged(address previousAdmin, address newAdmin);
+
+  /**
+   * @dev Storage slot with the admin of the contract.
+   * This is the keccak-256 hash of "eip1967.proxy.admin" subtracted by 1, and is
+   * validated in the constructor.
+   */
+
+  bytes32 internal constant ADMIN_SLOT = 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103;
+
+  /**
+   * @dev Modifier to check whether the `msg.sender` is the admin.
+   * If it is, it will run the function. Otherwise, it will delegate the call
+   * to the implementation.
+   */
+  modifier ifAdmin() {
+    if (msg.sender == _admin()) {
+      _;
+    } else {
+      _fallback();
+    }
+  }
+
+  /**
+   * @return The address of the proxy admin.
+   */
+  function admin() external ifAdmin returns (address) {
+    return _admin();
+  }
+
+  /**
+   * @return The address of the implementation.
+   */
+  function implementation() external ifAdmin returns (address) {
+    return _implementation();
+  }
+
+  /**
+   * @dev Changes the admin of the proxy.
+   * Only the current admin can call this function.
+   * @param newAdmin Address to transfer proxy administration to.
+   */
+  function changeAdmin(address newAdmin) external ifAdmin {
+    require(newAdmin != address(0), "Cannot change the admin of a proxy to the zero address");
+    emit AdminChanged(_admin(), newAdmin);
+    _setAdmin(newAdmin);
+  }
+
+  /**
+   * @dev Upgrade the backing implementation of the proxy.
+   * Only the admin can call this function.
+   * @param newImplementation Address of the new implementation.
+   */
+  function upgradeTo(address newImplementation) external ifAdmin {
+    _upgradeTo(newImplementation);
+  }
+
+  /**
+   * @dev Upgrade the backing implementation of the proxy and call a function
+   * on the new implementation.
+   * This is useful to initialize the proxied contract.
+   * @param newImplementation Address of the new implementation.
+   * @param data Data to send as msg.data in the low level call.
+   * It should include the signature and the parameters of the function to be called, as described in
+   * https://solidity.readthedocs.io/en/v0.4.24/abi-spec.html#function-selector-and-argument-encoding.
+   */
+  function upgradeToAndCall(address newImplementation, bytes calldata data) payable external ifAdmin {
+    _upgradeTo(newImplementation);
+    (bool success,) = newImplementation.delegatecall(data);
+    require(success);
+  }
+
+  /**
+   * @return adm The admin slot.
+   */
+  function _admin() internal view returns (address adm) {
+    bytes32 slot = ADMIN_SLOT;
+    assembly {
+      adm := sload(slot)
+    }
+  }
+
+  /**
+   * @dev Sets the address of the proxy admin.
+   * @param newAdmin Address of the new proxy admin.
+   */
+  function _setAdmin(address newAdmin) internal {
+    bytes32 slot = ADMIN_SLOT;
+
+    assembly {
+      sstore(slot, newAdmin)
+    }
+  }
+
+  /**
+   * @dev Only fall back when the sender is not the admin.
+   */
+  function _willFallback() virtual override internal {
+    require(msg.sender != _admin(), "Cannot call fallback function from the proxy admin");
+    //super._willFallback();
+  }
+}
+
+interface IAdminUpgradeabilityProxyView {
+  function admin() external view returns (address);
+  function implementation() external view returns (address);
+}
+
+
+/**
+ * @title UpgradeabilityProxy
+ * @dev Extends BaseUpgradeabilityProxy with a constructor for initializing
+ * implementation and init data.
+ */
+abstract contract UpgradeabilityProxy is BaseUpgradeabilityProxy {
+  /**
+   * @dev Contract constructor.
+   * @param _logic Address of the initial implementation.
+   * @param _data Data to send as msg.data to the implementation to initialize the proxied contract.
+   * It should include the signature and the parameters of the function to be called, as described in
+   * https://solidity.readthedocs.io/en/v0.4.24/abi-spec.html#function-selector-and-argument-encoding.
+   * This parameter is optional, if no data is given the initialization call to proxied contract will be skipped.
+   */
+  constructor(address _logic, bytes memory _data) public payable {
+    assert(IMPLEMENTATION_SLOT == bytes32(uint256(keccak256('eip1967.proxy.implementation')) - 1));
+    _setImplementation(_logic);
+    if(_data.length > 0) {
+      (bool success,) = _logic.delegatecall(_data);
+      require(success);
+    }
+  }  
+  
+  //function _willFallback() virtual override internal {
+    //super._willFallback();
+  //}
+}
+
+
+/**
+ * @title AdminUpgradeabilityProxy
+ * @dev Extends from BaseAdminUpgradeabilityProxy with a constructor for 
+ * initializing the implementation, admin, and init data.
+ */
+contract AdminUpgradeabilityProxy is BaseAdminUpgradeabilityProxy, UpgradeabilityProxy {
+  /**
+   * Contract constructor.
+   * @param _logic address of the initial implementation.
+   * @param _admin Address of the proxy administrator.
+   * @param _data Data to send as msg.data to the implementation to initialize the proxied contract.
+   * It should include the signature and the parameters of the function to be called, as described in
+   * https://solidity.readthedocs.io/en/v0.4.24/abi-spec.html#function-selector-and-argument-encoding.
+   * This parameter is optional, if no data is given the initialization call to proxied contract will be skipped.
+   */
+  constructor(address _logic, address _admin, bytes memory _data) UpgradeabilityProxy(_logic, _data) public payable {
+    assert(ADMIN_SLOT == bytes32(uint256(keccak256('eip1967.proxy.admin')) - 1));
+    _setAdmin(_admin);
+  }
+  
+  function _willFallback() override(Proxy, BaseAdminUpgradeabilityProxy) internal {
+    super._willFallback();
+  }
+}
+
+
+/**
+ * @title BaseAdminUpgradeabilityProxy
+ * @dev This contract combines an upgradeability proxy with an authorization
+ * mechanism for administrative tasks.
+ * All external functions in this contract must be guarded by the
+ * `ifAdmin` modifier. See ethereum/solidity#3864 for a Solidity
+ * feature proposal that would enable this to be done automatically.
+ */
+contract __BaseAdminUpgradeabilityProxy__ is BaseUpgradeabilityProxy {
+  /**
+   * @dev Emitted when the administration has been transferred.
+   * @param previousAdmin Address of the previous admin.
+   * @param newAdmin Address of the new admin.
+   */
+  event AdminChanged(address previousAdmin, address newAdmin);
+
+  /**
+   * @dev Storage slot with the admin of the contract.
+   * This is the keccak-256 hash of "eip1967.proxy.admin" subtracted by 1, and is
+   * validated in the constructor.
+   */
+
+  bytes32 internal constant ADMIN_SLOT = 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103;
+
+  /**
+   * @dev Modifier to check whether the `msg.sender` is the admin.
+   * If it is, it will run the function. Otherwise, it will delegate the call
+   * to the implementation.
+   */
+  //modifier ifAdmin() {
+  //  if (msg.sender == _admin()) {
+  //    _;
+  //  } else {
+  //    _fallback();
+  //  }
+  //}
+  modifier ifAdmin() {
+    require (msg.sender == _admin(), 'only admin');
+      _;
+  }
+
+  /**
+   * @return The address of the proxy admin.
+   */
+  //function admin() external ifAdmin returns (address) {
+  //  return _admin();
+  //}
+  function __admin__() external view returns (address) {
+    return _admin();
+  }
+
+  /**
+   * @return The address of the implementation.
+   */
+  //function implementation() external ifAdmin returns (address) {
+  //  return _implementation();
+  //}
+  function __implementation__() external view returns (address) {
+    return _implementation();
+  }
+
+  /**
+   * @dev Changes the admin of the proxy.
+   * Only the current admin can call this function.
+   * @param newAdmin Address to transfer proxy administration to.
+   */
+  //function changeAdmin(address newAdmin) external ifAdmin {
+  //  require(newAdmin != address(0), "Cannot change the admin of a proxy to the zero address");
+  //  emit AdminChanged(_admin(), newAdmin);
+  //  _setAdmin(newAdmin);
+  //}
+  function __changeAdmin__(address newAdmin) external ifAdmin {
+    require(newAdmin != address(0), "Cannot change the admin of a proxy to the zero address");
+    emit AdminChanged(_admin(), newAdmin);
+    _setAdmin(newAdmin);
+  }
+
+  /**
+   * @dev Upgrade the backing implementation of the proxy.
+   * Only the admin can call this function.
+   * @param newImplementation Address of the new implementation.
+   */
+  //function upgradeTo(address newImplementation) external ifAdmin {
+  //  _upgradeTo(newImplementation);
+  //}
+  function __upgradeTo__(address newImplementation) external ifAdmin {
+    _upgradeTo(newImplementation);
+  }
+
+  /**
+   * @dev Upgrade the backing implementation of the proxy and call a function
+   * on the new implementation.
+   * This is useful to initialize the proxied contract.
+   * @param newImplementation Address of the new implementation.
+   * @param data Data to send as msg.data in the low level call.
+   * It should include the signature and the parameters of the function to be called, as described in
+   * https://solidity.readthedocs.io/en/v0.4.24/abi-spec.html#function-selector-and-argument-encoding.
+   */
+  //function upgradeToAndCall(address newImplementation, bytes calldata data) payable external ifAdmin {
+  //  _upgradeTo(newImplementation);
+  //  (bool success,) = newImplementation.delegatecall(data);
+  //  require(success);
+  //}
+  function __upgradeToAndCall__(address newImplementation, bytes calldata data) payable external ifAdmin {
+    _upgradeTo(newImplementation);
+    (bool success,) = newImplementation.delegatecall(data);
+    require(success);
+  }
+
+  /**
+   * @return adm The admin slot.
+   */
+  function _admin() internal view returns (address adm) {
+    bytes32 slot = ADMIN_SLOT;
+    assembly {
+      adm := sload(slot)
+    }
+  }
+
+  /**
+   * @dev Sets the address of the proxy admin.
+   * @param newAdmin Address of the new proxy admin.
+   */
+  function _setAdmin(address newAdmin) internal {
+    bytes32 slot = ADMIN_SLOT;
+
+    assembly {
+      sstore(slot, newAdmin)
+    }
+  }
+
+  /**
+   * @dev Only fall back when the sender is not the admin.
+   */
+  //function _willFallback() virtual override internal {
+  //  require(msg.sender != _admin(), "Cannot call fallback function from the proxy admin");
+  //  //super._willFallback();
+  //}
+}
+
+
+/**
+ * @title AdminUpgradeabilityProxy
+ * @dev Extends from BaseAdminUpgradeabilityProxy with a constructor for 
+ * initializing the implementation, admin, and init data.
+ */
+contract __AdminUpgradeabilityProxy__ is __BaseAdminUpgradeabilityProxy__, UpgradeabilityProxy {
+  /**
+   * Contract constructor.
+   * @param _logic address of the initial implementation.
+   * @param _admin Address of the proxy administrator.
+   * @param _data Data to send as msg.data to the implementation to initialize the proxied contract.
+   * It should include the signature and the parameters of the function to be called, as described in
+   * https://solidity.readthedocs.io/en/v0.4.24/abi-spec.html#function-selector-and-argument-encoding.
+   * This parameter is optional, if no data is given the initialization call to proxied contract will be skipped.
+   */
+  constructor(address _logic, address _admin, bytes memory _data) UpgradeabilityProxy(_logic, _data) public payable {
+    assert(ADMIN_SLOT == bytes32(uint256(keccak256('eip1967.proxy.admin')) - 1));
+    _setAdmin(_admin);
+  }
+  
+  //function _willFallback() override(Proxy, BaseAdminUpgradeabilityProxy) internal {
+  //  super._willFallback();
+  //}
+}
+
+
+/**
+ * @title InitializableUpgradeabilityProxy
+ * @dev Extends BaseUpgradeabilityProxy with an initializer for initializing
+ * implementation and init data.
+ */
+abstract contract InitializableUpgradeabilityProxy is BaseUpgradeabilityProxy {
+  /**
+   * @dev Contract initializer.
+   * @param _logic Address of the initial implementation.
+   * @param _data Data to send as msg.data to the implementation to initialize the proxied contract.
+   * It should include the signature and the parameters of the function to be called, as described in
+   * https://solidity.readthedocs.io/en/v0.4.24/abi-spec.html#function-selector-and-argument-encoding.
+   * This parameter is optional, if no data is given the initialization call to proxied contract will be skipped.
+   */
+  function initialize(address _logic, bytes memory _data) public payable {
+    require(_implementation() == address(0));
+    assert(IMPLEMENTATION_SLOT == bytes32(uint256(keccak256('eip1967.proxy.implementation')) - 1));
+    _setImplementation(_logic);
+    if(_data.length > 0) {
+      (bool success,) = _logic.delegatecall(_data);
+      require(success);
+    }
+  }  
+}
+
+
+/**
+ * @title InitializableAdminUpgradeabilityProxy
+ * @dev Extends from BaseAdminUpgradeabilityProxy with an initializer for 
+ * initializing the implementation, admin, and init data.
+ */
+contract InitializableAdminUpgradeabilityProxy is BaseAdminUpgradeabilityProxy, InitializableUpgradeabilityProxy {
+  /**
+   * Contract initializer.
+   * @param _logic address of the initial implementation.
+   * @param _admin Address of the proxy administrator.
+   * @param _data Data to send as msg.data to the implementation to initialize the proxied contract.
+   * It should include the signature and the parameters of the function to be called, as described in
+   * https://solidity.readthedocs.io/en/v0.4.24/abi-spec.html#function-selector-and-argument-encoding.
+   * This parameter is optional, if no data is given the initialization call to proxied contract will be skipped.
+   */
+  function initialize(address _logic, address _admin, bytes memory _data) public payable {
+    require(_implementation() == address(0));
+    InitializableUpgradeabilityProxy.initialize(_logic, _data);
+    assert(ADMIN_SLOT == bytes32(uint256(keccak256('eip1967.proxy.admin')) - 1));
+    _setAdmin(_admin);
+  }
+  
+  function _willFallback() override(Proxy, BaseAdminUpgradeabilityProxy) internal {
+    super._willFallback();
+  }
+
+}
+
+
+interface IProxyFactory {
+    function productImplementation() external view returns (address);
+    function productImplementations(bytes32 name) external view returns (address);
+}
+
+
+/**
+ * @title ProductProxy
+ * @dev This contract implements a proxy that 
+ * it is deploied by ProxyFactory, 
+ * and it's implementation is stored in factory.
+ */
+contract ProductProxy is Proxy {
+    
+  /**
+   * @dev Storage slot with the address of the ProxyFactory.
+   * This is the keccak-256 hash of "eip1967.proxy.factory" subtracted by 1, and is
+   * validated in the constructor.
+   */
+  bytes32 internal constant FACTORY_SLOT = 0x7a45a402e4cb6e08ebc196f20f66d5d30e67285a2a8aa80503fa409e727a4af1;
+
+  function productName() virtual public pure returns (bytes32) {
+    return 0x0;
+  }
+
+  /**
+   * @dev Sets the factory address of the ProductProxy.
+   * @param newFactory Address of the new factory.
+   */
+  function _setFactory(address newFactory) internal {
+    require(OpenZeppelinUpgradesAddress.isContract(newFactory), "Cannot set a factory to a non-contract address");
+
+    bytes32 slot = FACTORY_SLOT;
+
+    assembly {
+      sstore(slot, newFactory)
+    }
+  }
+
+  /**
+   * @dev Returns the factory.
+   * @return factory Address of the factory.
+   */
+  function _factory() internal view returns (address factory) {
+    bytes32 slot = FACTORY_SLOT;
+    assembly {
+      factory := sload(slot)
+    }
+  }
+  
+  /**
+   * @dev Returns the current implementation.
+   * @return Address of the current implementation
+   */
+  function _implementation() virtual override internal view returns (address) {
+    address factory = _factory();
+    if(OpenZeppelinUpgradesAddress.isContract(factory))
+        return IProxyFactory(factory).productImplementations(productName());
+    else
+        return address(0);
+  }
+
+}
+
+
+/**
+ * @title InitializableProductProxy
+ * @dev Extends ProductProxy with an initializer for initializing
+ * factory and init data.
+ */
+contract InitializableProductProxy is ProductProxy {
+  /**
+   * @dev Contract initializer.
+   * @param factory Address of the initial factory.
+   * @param data Data to send as msg.data to the implementation to initialize the proxied contract.
+   * It should include the signature and the parameters of the function to be called, as described in
+   * https://solidity.readthedocs.io/en/v0.4.24/abi-spec.html#function-selector-and-argument-encoding.
+   * This parameter is optional, if no data is given the initialization call to proxied contract will be skipped.
+   */
+  function initialize(address factory, bytes memory data) public payable {
+    require(_factory() == address(0));
+    assert(FACTORY_SLOT == bytes32(uint256(keccak256('eip1967.proxy.factory')) - 1));
+    _setFactory(factory);
+    if(data.length > 0) {
+      (bool success,) = _implementation().delegatecall(data);
+      require(success);
+    }
+  }  
+}
+
+
+/**
+ * Utility library of inline functions on addresses
+ *
+ * Source https://raw.githubusercontent.com/OpenZeppelin/openzeppelin-solidity/v2.1.3/contracts/utils/Address.sol
+ * This contract is copied here and renamed from the original to avoid clashes in the compiled artifacts
+ * when the user imports a zos-lib contract (that transitively causes this contract to be compiled and added to the
+ * build/artifacts folder) as well as the vanilla Address implementation from an openzeppelin version.
+ */
+library OpenZeppelinUpgradesAddress {
+    /**
+     * Returns whether the target address is a contract
+     * @dev This function will return false if invoked during the constructor of a contract,
+     * as the code is not actually created until after the constructor finishes.
+     * @param account address of the account to check
+     * @return whether the target address is a contract
+     */
+    function isContract(address account) internal view returns (bool) {
+        uint256 size;
+        // XXX Currently there is no better way to check if there is a contract in an address
+        // than to check the size of the code at that address.
+        // See https://ethereum.stackexchange.com/a/14016/36603
+        // for more details about how this works.
+        // TODO Check this again before the Serenity release, because all addresses will be
+        // contracts then.
+        // solhint-disable-next-line no-inline-assembly
+        assembly { size := extcodesize(account) }
+        return size > 0;
+    }
+}
+
+
+/**
  * @title Initializable
  *
  * @dev Helper contract to support initializer functions. To use it, replace
@@ -512,6 +1164,9 @@ contract ReentrancyGuardUpgradeSafe is Initializable {
 
 
 contract Governable is Initializable {
+    // bytes32(uint256(keccak256('eip1967.proxy.admin')) - 1)
+    bytes32 internal constant ADMIN_SLOT = 0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103;
+
     address public governor;
 
     event GovernorshipTransferred(address indexed previousGovernor, address indexed newGovernor);
@@ -520,13 +1175,20 @@ contract Governable is Initializable {
      * @dev Contract initializer.
      * called once by the factory at time of deployment
      */
-    function initialize(address governor_) virtual public initializer {
+    function __Governable_init_unchained(address governor_) virtual public initializer {
         governor = governor_;
         emit GovernorshipTransferred(address(0), governor);
     }
 
+    function _admin() internal view returns (address adm) {
+        bytes32 slot = ADMIN_SLOT;
+        assembly {
+            adm := sload(slot)
+        }
+    }
+    
     modifier governance() {
-        require(msg.sender == governor);
+        require(msg.sender == governor || msg.sender == _admin());
         _;
     }
 
@@ -568,10 +1230,10 @@ contract Configurable is Governable {
     function getConfig(bytes32 key) public view returns (uint) {
         return config[key];
     }
-    function getConfig(bytes32 key, uint index) public view returns (uint) {
+    function getConfigI(bytes32 key, uint index) public view returns (uint) {
         return config[bytes32(uint(key) ^ index)];
     }
-    function getConfig(bytes32 key, address addr) public view returns (uint) {
+    function getConfigA(bytes32 key, address addr) public view returns (uint) {
         return config[bytes32(uint(key) ^ uint(addr))];
     }
 
@@ -579,38 +1241,21 @@ contract Configurable is Governable {
         if(config[key] != value)
             config[key] = value;
     }
-    function _setConfig(bytes32 key, uint index, uint value) internal {
+    function _setConfigI(bytes32 key, uint index, uint value) internal {
         _setConfig(bytes32(uint(key) ^ index), value);
     }
-    function _setConfig(bytes32 key, address addr, uint value) internal {
+    function _setConfigA(bytes32 key, address addr, uint value) internal {
         _setConfig(bytes32(uint(key) ^ uint(addr)), value);
     }
     
     function setConfig(bytes32 key, uint value) external governance {
         _setConfig(key, value);
     }
-    function setConfig(bytes32 key, uint index, uint value) external governance {
+    function setConfigI(bytes32 key, uint index, uint value) external governance {
         _setConfig(bytes32(uint(key) ^ index), value);
     }
-    function setConfig(bytes32 key, address addr, uint value) public governance {
+    function setConfigA(bytes32 key, address addr, uint value) public governance {
         _setConfig(bytes32(uint(key) ^ uint(addr)), value);
-    }
-}
-
-
-contract RewardsDistributor is Configurable {
-    using SafeERC20 for IERC20;
-
-    address public rewardsToken;
-	
-    function initialize(address governor, address _rewardsToken) public initializer {
-        super.initialize(governor);
-        rewardsToken = _rewardsToken;
-    }
-    
-    function approvePool(address pool, uint amount) public governance {
-        //IERC20(rewardsToken).safeApprove(pool, amount);
-        IERC20(rewardsToken).approve(pool, amount);             // GT do not support safeApprove
     }
 }
 
@@ -677,12 +1322,20 @@ contract StakingRewards is IStakingRewards, RewardsDistributionRecipient, Reentr
     /* ========== CONSTRUCTOR ========== */
 
     //constructor(
-    function initialize(
+    function __StakingRewards_init(
         address _rewardsDistribution,
         address _rewardsToken,
         address _stakingToken
     ) public virtual initializer {
-        super.__ReentrancyGuard_init();
+        __ReentrancyGuard_init_unchained();
+        __StakingRewards_init_unchained(_rewardsDistribution, _rewardsToken, _stakingToken);
+    }
+
+    function __StakingRewards_init_unchained(
+        address _rewardsDistribution,
+        address _rewardsToken,
+        address _stakingToken
+    ) public virtual initializer {
         rewardsToken = IERC20(_rewardsToken);
         stakingToken = IERC20(_stakingToken);
         rewardsDistribution = _rewardsDistribution;
@@ -826,7 +1479,7 @@ contract StakingPool is Configurable, StakingRewards {
 	bytes32 internal constant _rewards2Begin_   = 'rewards2Begin';
 
 	uint public lep;            // 1: linear, 2: exponential, 3: power
-	uint public period;         // obsolete
+	//uint public period;         // obsolete
 	uint public begin;
 
     mapping (address => uint256) public paid;
@@ -835,21 +1488,29 @@ contract StakingPool is Configurable, StakingRewards {
     address[] pathTVL;
     address[] pathAPY;
 
-    function initialize(address _governor, 
+    function __StakingPool_init(address _governor, 
         address _rewardsDistribution,
         address _rewardsToken,
         address _stakingToken,
         address _ecoAddr
     ) public virtual initializer {
-	    super.initialize(_governor);
-        super.initialize(_rewardsDistribution, _rewardsToken, _stakingToken);
+	    __ReentrancyGuard_init_unchained();
+	    __Governable_init_unchained(_governor);
+        //__StakingRewards_init_unchained(_rewardsDistribution, _rewardsToken, _stakingToken);
+        __StakingPool_init_unchained(_rewardsDistribution, _rewardsToken, _stakingToken, _ecoAddr);
+    }
+
+    function __StakingPool_init_unchained(address _rewardsDistribution, address _rewardsToken, address _stakingToken, address _ecoAddr) public virtual governance {
+        rewardsToken = IERC20(_rewardsToken);
+        stakingToken = IERC20(_stakingToken);
+        rewardsDistribution = _rewardsDistribution;
         config[_ecoAddr_] = uint(_ecoAddr);
         config[_ecoRatio_] = 0.1 ether;
     }
 
-    function notifyRewardBegin(uint _lep, uint _period, uint _span, uint _begin) virtual public governance updateReward(address(0)) {
+    function notifyRewardBegin(uint _lep, /*uint _period,*/ uint _span, uint _begin) virtual public governance updateReward(address(0)) {
         lep             = _lep;         // 1: linear, 2: exponential, 3: power
-        period          = _period;
+        //period          = _period;
         rewardsDuration = _span;
         begin           = _begin;
         periodFinish    = _begin.add(_span);
@@ -866,7 +1527,7 @@ contract StakingPool is Configurable, StakingRewards {
         if(begin == 0 || begin >= now || lastUpdateTime >= now)
             return 0;
             
-        amt = rewardsToken.allowance(rewardsDistribution, address(this)).sub0(rewards[address(0)]);
+        amt = Math.min(rewardsToken.allowance(rewardsDistribution, address(this)), rewardsToken.balanceOf(rewardsDistribution)).sub0(rewards[address(0)]);
         
         // calc rewardDelta in period
         if(lep == 3) {                                                              // power
@@ -882,6 +1543,9 @@ contract StakingPool is Configurable, StakingRewards {
             amt = amt.mul(now.sub(lastUpdateTime)).div(periodFinish.sub(lastUpdateTime));
         else if(lastUpdateTime >= periodFinish)
             amt = 0;
+            
+        if(config[_ecoAddr_] != 0)
+            amt = amt.mul(uint(1e18).sub(config[_ecoRatio_])).div(1 ether);
     }
     
     function rewardPerToken() virtual override public view returns (uint256) {
@@ -894,38 +1558,41 @@ contract StakingPool is Configurable, StakingRewards {
             );
     }
 
-    modifier updateReward(address account) virtual override {
-        (uint delta, uint d) = (rewardDelta(), 0);
+    function earned(address account) virtual override public view returns (uint256) {
+        return Math.min(Math.min(super.earned(account), rewardsToken.allowance(rewardsDistribution, address(this))), rewardsToken.balanceOf(rewardsDistribution));
+	}    
+	
+    modifier updateReward(address account) override {
         rewardPerTokenStored = rewardPerToken();
+        uint delta = rewardDelta();
+        {
+            address addr = address(config[_ecoAddr_]);
+            uint ratio = config[_ecoRatio_];
+            if(addr != address(0) && ratio != 0) {
+                uint d = delta.mul(ratio).div(uint(1e18).sub(ratio));
+                rewards[addr] = rewards[addr].add(d);
+                delta = delta.add(d);
+            }
+        }
+        rewards[address(0)] = rewards[address(0)].add(delta);
         lastUpdateTime = now;
         if (account != address(0)) {
             rewards[account] = earned(account);
             userRewardPerTokenPaid[account] = rewardPerTokenStored;
         }
-
-        address addr = address(config[_ecoAddr_]);
-        uint ratio = config[_ecoRatio_];
-        if(addr != address(0) && ratio != 0) {
-            d = delta.mul(ratio).div(1 ether);
-            rewards[addr] = rewards[addr].add(d);
-        }
-        rewards[address(0)] = rewards[address(0)].add(delta).add(d);
         _;
     }
 
     function getReward() virtual override public {
-        getReward(msg.sender);
+        getRewardA(msg.sender);
     }
-    function getReward(address payable acct) virtual public nonReentrant updateReward(acct) {
-        require(acct != address(0), 'invalid address');
-        require(getConfig(_blocklist_, acct) == 0, 'In blocklist');
+    function getRewardA(address payable acct) virtual public nonReentrant updateReward(acct) {
+        require(getConfigA(_blocklist_, acct) == 0, 'In blocklist');
         bool isContract = acct.isContract();
-        require(!isContract || config[_allowContract_] != 0 || getConfig(_allowlist_, acct) != 0, 'No allowContract');
+        require(!isContract || config[_allowContract_] != 0 || getConfigA(_allowlist_, acct) != 0, 'No allowContract');
 
         uint256 reward = rewards[acct];
         if (reward > 0) {
-            paid[acct] = paid[acct].add(reward);
-            paid[address(0)] = paid[address(0)].add(reward);
             rewards[acct] = 0;
             rewards[address(0)] = rewards[address(0)].sub0(reward);
             rewardsToken.safeTransferFrom(rewardsDistribution, acct, reward);
@@ -939,6 +1606,25 @@ contract StakingPool is Configurable, StakingRewards {
         }
     }
     event RewardPaid2(address indexed user, uint256 reward2);
+
+    //function compound() virtual public nonReentrant updateReward(msg.sender) {      // only for pool3
+    //    require(getConfigA(_blocklist_, msg.sender) == 0, 'In blocklist');
+    //    bool isContract = msg.sender.isContract();
+    //    require(!isContract || config[_allowContract_] != 0 || getConfigA(_allowlist_, msg.sender) != 0, 'No allowContract');
+    //    require(stakingToken == rewardsToken, 'not pool3');
+    //
+    //    uint reward = rewards[msg.sender];
+    //    if (reward > 0) {
+    //        rewards[msg.sender] = 0;
+    //        rewards[address(0)] = rewards[address(0)].sub0(reward);
+    //        rewardsToken.safeTransferFrom(rewardsDistribution, address(this), reward);
+    //        emit RewardPaid(msg.sender, reward);
+    //        
+    //        _totalSupply = _totalSupply.add(reward);
+    //        _balances[msg.sender] = _balances[msg.sender].add(reward);
+    //        emit Staked(msg.sender, reward);
+    //    }
+    //}
 
     function getRewardForDuration() override external view returns (uint256) {
         return rewardsToken.allowance(rewardsDistribution, address(this)).sub0(rewards[address(0)]);
@@ -1027,7 +1713,28 @@ interface IWETH is IERC20 {
 }
 
 contract EthPool is StakingPool {
+    bytes32 internal constant _WETH_			= 'WETH';
+
+    function __EthPool_init(address _governor, 
+        address _rewardsDistribution,
+        address _rewardsToken,
+        address _stakingToken,
+        address _ecoAddr,
+		address _WETH
+    ) public virtual initializer {
+	    __ReentrancyGuard_init_unchained();
+	    __Governable_init_unchained(_governor);
+        //__StakingRewards_init_unchained(_rewardsDistribution, _rewardsToken, _stakingToken);
+        __StakingPool_init_unchained(_rewardsDistribution, _rewardsToken, _stakingToken, _ecoAddr);
+		__EthPool_init_unchained(_WETH);
+    }
+
+    function __EthPool_init_unchained(address _WETH) public virtual governance {
+        config[_WETH_] = uint(_WETH);
+    }
+
     function stakeEth() virtual public payable nonReentrant updateReward(msg.sender) {
+        require(address(stakingToken) == address(config[_WETH_]), 'stakingToken is not WETH');
         uint amount = msg.value;
         require(amount > 0, "Cannot stake 0");
         _totalSupply = _totalSupply.add(amount);
@@ -1037,6 +1744,7 @@ contract EthPool is StakingPool {
     }
 
     function withdrawEth(uint256 amount) virtual public nonReentrant updateReward(msg.sender) {
+        require(address(stakingToken) == address(config[_WETH_]), 'stakingToken is not WETH');
         require(amount > 0, "Cannot withdraw 0");
         _totalSupply = _totalSupply.sub(amount);
         _balances[msg.sender] = _balances[msg.sender].sub(amount);
@@ -1051,8 +1759,11 @@ contract EthPool is StakingPool {
     }
     
     receive () payable external {
-        
+        stakeEth();
     }
+
+    // Reserved storage space to allow for layout changes in the future.
+    uint256[50] private ______gap;
 }
 
 contract DoublePool is StakingPool {
@@ -1063,19 +1774,21 @@ contract DoublePool is StakingPool {
     mapping(address => uint256) public userRewardPerTokenPaid2;
     mapping(address => uint256) public rewards2;
 
-    function initialize(address, address, address, address, address) override public {
-        revert();
-    }
+    function __DoublePool_init(address _governor, address _rewardsDistribution, address _rewardsToken, address _stakingToken, address _ecoAddr, address _stakingPool2, address _rewardsToken2) public initializer {
+	    __ReentrancyGuard_init_unchained();
+	    __Governable_init_unchained(_governor);
+	    //__StakingRewards_init_unchained(_rewardsDistribution, _rewardsToken, _stakingToken);
+	    __StakingPool_init_unchained(_rewardsDistribution, _rewardsToken, _stakingToken, _ecoAddr);
+	    __DoublePool_init_unchained(_stakingPool2, _rewardsToken2);
+	}
     
-    function initialize(address _governor, address _rewardsDistribution, address _rewardsToken, address _stakingToken, address _ecoAddr, address _stakingPool2, address _rewardsToken2) public initializer {
-	    super.initialize(_governor, _rewardsDistribution, _rewardsToken, _stakingToken, _ecoAddr);
-	    
+    function __DoublePool_init_unchained(address _stakingPool2, address _rewardsToken2) public governance {
 	    stakingPool2 = IStakingRewards(_stakingPool2);
 	    rewardsToken2 = IERC20(_rewardsToken2);
 	}
     
-    function notifyRewardBegin(uint _lep, uint _period, uint _span, uint _begin) virtual override public governance updateReward2(address(0)) {
-        super.notifyRewardBegin(_lep, _period, _span, _begin);
+    function notifyRewardBegin(uint _lep, /*uint _period,*/ uint _span, uint _begin) virtual override public governance updateReward2(address(0)) {
+        super.notifyRewardBegin(_lep, /*_period,*/ _span, _begin);
     }
     
     function stake(uint amount) virtual override public updateReward2(msg.sender) {
@@ -1126,24 +1839,359 @@ contract DoublePool is StakingPool {
         _;
     }
 
+    // Reserved storage space to allow for layout changes in the future.
+    uint256[50] private ______gap;
 }
+
+
+interface IMasterChef {
+    function poolInfo(uint pid) external view returns (address lpToken, uint allocPoint, uint lastRewardBlock, uint accCakePerShare);
+    function userInfo(uint pid, address user) external view returns (uint amount, uint rewardDebt);
+    function pending(uint pid, address user) external view returns (uint);
+    function pendingCake(uint pid, address user) external view returns (uint);
+    function deposit(uint pid, uint amount) external;
+    function withdraw(uint pid, uint amount) external;
+}
+
+contract NestMasterChef is StakingPool {
+    IERC20 internal constant Cake = IERC20(0x0E09FaBB73Bd3Ade0a17ECC321fD13a19e81cE82);
+    
+    IMasterChef public stakingPool2;
+    IERC20 public rewardsToken2;
+    mapping(address => uint256) public userRewardPerTokenPaid2;
+    mapping(address => uint256) public rewards2;
+    uint public pid2;
+    uint internal _rewardPerToken2;
+
+    function __NestMasterChef_init(address _governor, address _rewardsDistribution, address _rewardsToken, address _stakingToken, address _ecoAddr, address _stakingPool2, address _rewardsToken2, uint _pid2) public initializer {
+	    __Governable_init_unchained(_governor);
+        __ReentrancyGuard_init_unchained();
+        //__StakingRewards_init_unchained(_rewardsDistribution, _rewardsToken, _stakingToken);
+        __StakingPool_init_unchained(_rewardsDistribution, _rewardsToken, _stakingToken, _ecoAddr);
+        __NestMasterChef_init_unchained(_stakingPool2, _rewardsToken2, _pid2);
+	}
+
+    function __NestMasterChef_init_unchained(address _stakingPool2, address _rewardsToken2, uint _pid2) public governance {
+	    stakingPool2 = IMasterChef(_stakingPool2);
+	    rewardsToken2 = IERC20(_rewardsToken2);
+	    pid2 = _pid2;
+    }
+    
+    function notifyRewardBegin(uint _lep, /*uint _period,*/ uint _span, uint _begin) virtual override public governance updateReward2(address(0)) {
+        super.notifyRewardBegin(_lep, /*_period,*/ _span, _begin);
+    }
+    
+    function migrate() virtual public governance updateReward2(address(0)) {
+        uint total = stakingToken.balanceOf(address(this));
+        stakingToken.approve(address(stakingPool2), total);
+        stakingPool2.deposit(pid2, total);
+    }        
+    
+    function stake(uint amount) virtual override public updateReward2(msg.sender) {
+        super.stake(amount);
+        stakingToken.approve(address(stakingPool2), amount);
+        stakingPool2.deposit(pid2, amount);
+    }
+
+    function withdraw(uint amount) virtual override public updateReward2(msg.sender) {
+        stakingPool2.withdraw(pid2, amount);
+        super.withdraw(amount);
+    }
+    
+    function getReward2() virtual public nonReentrant updateReward2(msg.sender) {
+        uint256 reward2 = rewards2[msg.sender];
+        if (reward2 > 0) {
+            rewards2[msg.sender] = 0;
+            rewardsToken2.safeTransfer(msg.sender, reward2);
+            emit RewardPaid2(msg.sender, reward2);
+        }
+    }
+    event RewardPaid2(address indexed user, uint256 reward2);
+
+    function getDoubleReward() virtual public {
+        getReward();
+        getReward2();
+    }
+    
+    function exit() virtual override public {
+        super.exit();
+        getReward2();
+    }
+    
+    function rewardPerToken2() virtual public view returns (uint256) {
+        if(_totalSupply == 0)
+            return _rewardPerToken2;
+        else if(rewardsToken2 == Cake)
+            return stakingPool2.pendingCake(pid2, address(this)).mul(1e18).div(_totalSupply).add(_rewardPerToken2);
+        else
+            return stakingPool2.pending(pid2, address(this)).mul(1e18).div(_totalSupply).add(_rewardPerToken2);
+    }
+
+    function earned2(address account) virtual public view returns (uint256) {
+        return _balances[account].mul(rewardPerToken2().sub(userRewardPerTokenPaid2[account])).div(1e18).add(rewards2[account]);
+    }
+
+    modifier updateReward2(address account) virtual {
+        if(_totalSupply > 0) {
+            uint delta = rewardsToken2.balanceOf(address(this));
+            stakingPool2.deposit(pid2, 0);
+            delta = rewardsToken2.balanceOf(address(this)).sub(delta);
+            _rewardPerToken2 = delta.mul(1e18).div(_totalSupply).add(_rewardPerToken2);
+        }
+        
+        if (account != address(0)) {
+            rewards2[account] = earned2(account);
+            userRewardPerTokenPaid2[account] = _rewardPerToken2;
+        }
+        _;
+    }
+
+    uint256[50] private __gap;
+}
+
+contract IioPoolV2 is StakingPool {         // support multi IIO at the same time
+    //address internal constant HelmetAddress = 0x948d2a81086A075b3130BAc19e4c6DEe1D2E3fE8;
+    address internal constant BurnAddress   = 0x000000000000000000000000000000000000dEaD;
+
+    uint private __lastUpdateTime3;                             // obsolete
+    IERC20 private __rewardsToken3;                             // obsolete
+    mapping(IERC20 => uint) public totalSupply3;                                    // rewardsToken3 => totalSupply3
+    mapping(IERC20 => uint) internal _rewardPerToken3;                              // rewardsToken3 => _rewardPerToken3
+    mapping(IERC20 => uint) public begin3;                                          // rewardsToken3 => begin3
+    mapping(IERC20 => uint) public end3;                                            // rewardsToken3 => end3
+    mapping(IERC20 => uint) public claimTime3;                                      // rewardsToken3 => claimTime3
+    mapping(IERC20 => uint) public ticketVol3;                                      // rewardsToken3 => ticketVol3
+    mapping(IERC20 => IERC20)  public ticketToken3;                                 // rewardsToken3 => ticketToken3
+    mapping(IERC20 => address) public ticketRecipient3;                             // rewardsToken3 => ticketRecipient3
+
+    mapping(IERC20 => mapping(address => bool)) public applied3;                    // rewardsToken3 => acct => applied3
+    mapping(IERC20 => mapping(address => uint)) public userRewardPerTokenPaid3;     // rewardsToken3 => acct => paid3
+    mapping(IERC20 => mapping(address => uint)) public rewards3;                    // rewardsToken3 => acct => rewards3
+    
+    mapping(IERC20 => uint) public lastUpdateTime3;                                 // rewardsToken3 => lastUpdateTime3
+    IERC20[] public all;                                                            // all rewardsToken3
+    IERC20[] public active;                                                         // active rewardsToken3
+    
+    //function setReward3BurnHelmet(IERC20 rewardsToken3_, uint begin3_, uint end3_, uint claimTime3_, uint ticketVol3_) virtual external {
+    //    setReward3(rewardsToken3_, begin3_, end3_, claimTime3_, ticketVol3_, IERC20(HelmetAddress), BurnAddress);
+    //}
+    function setReward3(IERC20 rewardsToken3_, uint begin3_, uint end3_, uint claimTime3_, uint ticketVol3_, IERC20 ticketToken3_, address ticketRecipient3_) virtual public governance {
+        lastUpdateTime3     [rewardsToken3_]= begin3_;
+        //rewardsToken3       = rewardsToken3_;
+        begin3              [rewardsToken3_] = begin3_;
+        end3                [rewardsToken3_] = end3_;
+        claimTime3          [rewardsToken3_] = claimTime3_;
+        ticketVol3          [rewardsToken3_] = ticketVol3_;
+        ticketToken3        [rewardsToken3_] = ticketToken3_;
+        ticketRecipient3    [rewardsToken3_] = ticketRecipient3_;
+        
+        uint i=0;
+        for(; i<all.length; i++)
+            if(all[i] == rewardsToken3_)
+                break;
+        if(i>=all.length)
+            all.push(rewardsToken3_);
+            
+        i=0;
+        for(; i<active.length; i++)
+            if(active[i] == rewardsToken3_)
+                break;
+        if(i>=active.length)
+            active.push(rewardsToken3_);
+            
+        emit SetReward3(rewardsToken3_, begin3_, end3_, claimTime3_, ticketVol3_, ticketToken3_, ticketRecipient3_);
+    }
+    event SetReward3(IERC20 indexed rewardsToken3_, uint begin3_, uint end3_, uint claimTime3_, uint ticketVol3_, IERC20 indexed ticketToken3_, address indexed ticketRecipient3_);
+    
+    //function deactive(IERC20 rewardsToken3_) virtual public governance {
+    //    for(uint i=0; i<active.length; i++)
+    //        if(active[i] == rewardsToken3_) {
+    //            active[i] = active[active.length-1];
+    //            active.pop();
+    //            emit Deactive(rewardsToken3_);
+    //            return;
+    //        }
+    //    revert('not found active rewardsToken3_');
+    //}
+    //event Deactive(IERC20 indexed rewardsToken3_);
+
+    function applyReward3(IERC20 rewardsToken3_) virtual public updateReward3(rewardsToken3_, msg.sender) {
+        //IERC20 rewardsToken3_ = rewardsToken3;                                          // save gas
+        require(!applied3[rewardsToken3_][msg.sender], 'applied already');
+        require(now < end3[rewardsToken3_], 'expired');
+        
+        IERC20 ticketToken3_ = ticketToken3[rewardsToken3_];                            // save gas
+        if(address(ticketToken3_) != address(0))
+            ticketToken3_.safeTransferFrom(msg.sender, ticketRecipient3[rewardsToken3_], ticketVol3[rewardsToken3_]);
+        applied3[rewardsToken3_][msg.sender] = true;
+        userRewardPerTokenPaid3[rewardsToken3_][msg.sender] = _rewardPerToken3[rewardsToken3_];
+        totalSupply3[rewardsToken3_] = totalSupply3[rewardsToken3_].add(_balances[msg.sender]);
+        emit ApplyReward3(msg.sender, rewardsToken3_);
+    }
+    event ApplyReward3(address indexed acct, IERC20 indexed rewardsToken3);
+    
+    function rewardDelta3(IERC20 rewardsToken3_) virtual public view returns (uint amt) {
+        //IERC20 rewardsToken3_ = rewardsToken3;                                          // save gas
+        uint lastUpdateTime3_ = lastUpdateTime3[rewardsToken3_];                        // save gas
+        if(begin3[rewardsToken3_] == 0 || begin3[rewardsToken3_] >= now || lastUpdateTime3_ >= now)
+            return 0;
+            
+        amt = Math.min(rewardsToken3_.allowance(rewardsDistribution, address(this)), rewardsToken3_.balanceOf(rewardsDistribution)).sub0(rewards3[rewardsToken3_][address(0)]);
+        
+        uint end3_ = end3[rewardsToken3_];                                              // save gas
+        if(now < end3_)
+            amt = amt.mul(now.sub(lastUpdateTime3_)).div(end3_.sub(lastUpdateTime3_));
+        else if(lastUpdateTime3_ >= end3_)
+            amt = 0;
+            
+        if(config[_ecoAddr_] != 0)
+            amt = amt.mul(uint(1e18).sub(config[_ecoRatio_])).div(1 ether);
+    }
+    
+    function rewardPerToken3(IERC20 rewardsToken3_) virtual public view returns (uint) {
+        if (totalSupply3[rewardsToken3_] == 0) {
+            return _rewardPerToken3[rewardsToken3_];
+        }
+        return
+            _rewardPerToken3[rewardsToken3_].add(
+                rewardDelta3(rewardsToken3_).mul(1e18).div(totalSupply3[rewardsToken3_])
+            );
+    }
+
+    function earned3(IERC20 rewardsToken3_, address account) virtual public view returns (uint) {
+        if(!applied3[rewardsToken3_][account])
+            return 0;
+        return Math.min(rewardsToken3_.balanceOf(rewardsDistribution), _balances[account].mul(rewardPerToken3(rewardsToken3_).sub(userRewardPerTokenPaid3[rewardsToken3_][account])).div(1e18).add(rewards3[rewardsToken3_][account]));
+    }
+
+    function _updateReward3(IERC20 rewardsToken3_, address account) virtual internal {
+        bool applied3_ = applied3[rewardsToken3_][account];                             // save gas
+        if(account == address(0) || applied3_) {
+            _rewardPerToken3[rewardsToken3_] = rewardPerToken3(rewardsToken3_);
+            uint delta = rewardDelta3(rewardsToken3_);
+            {
+                address addr = address(config[_ecoAddr_]);
+                uint ratio = config[_ecoRatio_];
+                if(addr != address(0) && ratio != 0) {
+                    uint d = delta.mul(ratio).div(uint(1e18).sub(ratio));
+                    rewards3[rewardsToken3_][addr] = rewards3[rewardsToken3_][addr].add(d);
+                    delta = delta.add(d);
+                }
+            }
+            rewards3[rewardsToken3_][address(0)] = rewards3[rewardsToken3_][address(0)].add(delta);
+            lastUpdateTime3[rewardsToken3_] = Math.max(begin3[rewardsToken3_], Math.min(now, end3[rewardsToken3_]));
+        }
+        if (account != address(0) && applied3_) {
+            rewards3[rewardsToken3_][account] = earned3(rewardsToken3_, account);
+            userRewardPerTokenPaid3[rewardsToken3_][account] = _rewardPerToken3[rewardsToken3_];
+        }
+    }
+    
+    modifier updateReward3(IERC20 rewardsToken3_, address account) virtual {
+        _updateReward3(rewardsToken3_, account);
+        _;
+    }
+
+    function stake(uint amount) virtual override public {
+        super.stake(amount);
+        for(uint i=0; i<active.length; i++) {
+            IERC20 rewardsToken3_ = active[i];                                          // save gas
+            _updateReward3(rewardsToken3_, msg.sender);
+            if(applied3[rewardsToken3_][msg.sender])
+                totalSupply3[rewardsToken3_] = totalSupply3[rewardsToken3_].add(amount);
+        }    
+    }
+
+    function withdraw(uint amount) virtual override public {
+        for(uint i=0; i<active.length; i++) {
+            IERC20 rewardsToken3_ = active[i];                                          // save gas
+            _updateReward3(rewardsToken3_, msg.sender);
+            if(applied3[rewardsToken3_][msg.sender])
+                totalSupply3[rewardsToken3_] = totalSupply3[rewardsToken3_].sub(amount);
+        }
+        super.withdraw(amount);
+    }
+    
+    function getReward3(IERC20 rewardsToken3_) virtual public nonReentrant updateReward3(rewardsToken3_, msg.sender) {
+        require(getConfigA(_blocklist_, msg.sender) == 0, 'In blocklist');
+        bool isContract = msg.sender.isContract();
+        require(!isContract || config[_allowContract_] != 0 || getConfigA(_allowlist_, msg.sender) != 0, 'No allowContract');
+
+        //IERC20 rewardsToken3_ = rewardsToken3;                                          // save gas
+        require(now >= claimTime3[rewardsToken3_], "it's not time yet");
+        uint256 reward3 = rewards3[rewardsToken3_][msg.sender];
+        if (reward3 > 0) {
+            rewards3[rewardsToken3_][msg.sender] = 0;
+            rewards3[rewardsToken3_][address(0)] = rewards3[rewardsToken3_][address(0)].sub0(reward3);
+            rewardsToken3_.safeTransferFrom(rewardsDistribution, msg.sender, reward3);
+            emit RewardPaid3(msg.sender, rewardsToken3_, reward3);
+        }
+    }
+    event RewardPaid3(address indexed user, IERC20 indexed rewardsToken3_, uint256 reward3);
+    
+    uint[47] private __gap;
+}
+
+contract NestMasterChefIioV2 is NestMasterChef, IioPoolV2 {
+    function notifyRewardBegin(uint _lep, /*uint _period,*/ uint _span, uint _begin) virtual override(StakingPool, NestMasterChef) public {
+        NestMasterChef.notifyRewardBegin(_lep, /*_period,*/ _span, _begin);
+    }
+    
+    function stake(uint amount) virtual override(NestMasterChef, IioPoolV2) public {
+        super.stake(amount);
+    }
+
+    function withdraw(uint amount) virtual override(NestMasterChef, IioPoolV2) public {
+        super.withdraw(amount);
+    }
+    
+    function exit() virtual override(StakingRewards, NestMasterChef) public {
+        NestMasterChef.exit();
+    }
+    
+    
+    uint[50] private __gap;
+}
+    
+contract BurningPool is StakingPool {
+    address internal constant BurnAddress   = 0x000000000000000000000000000000000000dEaD;
+    
+    function stake(uint256 amount) virtual override public {
+        super.stake(amount);
+        stakingToken.safeTransfer(BurnAddress, stakingToken.balanceOf(address(this)));
+    }
+
+    function withdraw(uint256) virtual override public {
+        revert('Burned already, none to withdraw');
+    }
+
+    // Reserved storage space to allow for layout changes in the future.
+    uint256[50] private ______gap;
+}
+
 
 contract Mine is Governable {
     using SafeERC20 for IERC20;
 
     address public reward;
 
-    function initialize(address governor, address reward_) public initializer {
-        super.initialize(governor);
+    function __Mine_init(address governor, address reward_) public initializer {
+        __Governable_init_unchained(governor);
+        __Mine_init_unchained(reward_);
+    }
+    
+    function __Mine_init_unchained(address reward_) public governance {
         reward = reward_;
     }
     
     function approvePool(address pool, uint amount) public governance {
-        IERC20(reward).safeApprove(pool, amount);
+        IERC20(reward).approve(pool, amount);
     }
     
     function approveToken(address token, address pool, uint amount) public governance {
-        IERC20(token).safeApprove(pool, amount);
+        IERC20(token).approve(pool, amount);
     }
-    
+
+    // Reserved storage space to allow for layout changes in the future.
+    uint256[50] private ______gap;
 }
