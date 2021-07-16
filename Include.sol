@@ -3,6 +3,11 @@
 pragma solidity ^0.6.0;
 pragma experimental ABIEncoderV2;
 
+contract PlaceHolder {
+    
+}
+
+
 /**
  * @title Proxy
  * @dev Implements delegation of calls to other contracts, with proper
