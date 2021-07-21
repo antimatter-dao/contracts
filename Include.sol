@@ -630,7 +630,7 @@ contract InitializableProductProxy is ProductProxy {
    * https://solidity.readthedocs.io/en/v0.4.24/abi-spec.html#function-selector-and-argument-encoding.
    * This parameter is optional, if no data is given the initialization call to proxied contract will be skipped.
    */
-  function __InitializableProductProxy_init(address factory, bytes32 name, bytes memory data) public payable {
+  function __InitializableProductProxy_init(address factory, bytes32 name, bytes memory data) external payable {
     address factory_ = _factory();
     require(factory_ == address(0) || msg.sender == factory_ || msg.sender == IProxyFactory(factory_).governor() || msg.sender == IProxyFactory(factory_).__admin__());
     assert(FACTORY_SLOT == bytes32(uint256(keccak256('eip1967.proxy.factory')) - 1));
@@ -645,17 +645,15 @@ contract InitializableProductProxy is ProductProxy {
 }
 
 
-contract __AdminUpgradeabilityProductProxy__ is __BaseAdminUpgradeabilityProxy__, ProductProxy {
-  constructor(address admin, address logic, address factory, bytes32 name, bytes memory data) public payable {
-    assert(IMPLEMENTATION_SLOT  == bytes32(uint256(keccak256('eip1967.proxy.implementation')) - 1));
+contract __InitializableAdminUpgradeabilityProductProxy__ is __BaseAdminUpgradeabilityProxy__, ProductProxy {
+  function __InitializableAdminUpgradeabilityProductProxy_init__(address admin, address logic, address factory, bytes32 name, bytes memory data) public payable {
     assert(ADMIN_SLOT           == bytes32(uint256(keccak256('eip1967.proxy.admin')) - 1));
+    assert(IMPLEMENTATION_SLOT  == bytes32(uint256(keccak256('eip1967.proxy.implementation')) - 1));
     assert(FACTORY_SLOT         == bytes32(uint256(keccak256('eip1967.proxy.factory')) - 1));
     assert(NAME_SLOT            == bytes32(uint256(keccak256('eip1967.proxy.name')) - 1));
+    address admin_ = _admin();
+    require(admin_ == address(0) || msg.sender == admin_);
     _setAdmin(admin);
-    __AdminUpgradeabilityProductProxy_init(logic, factory, name, data);
-  }
-  
-  function __AdminUpgradeabilityProductProxy_init(address logic, address factory, bytes32 name, bytes memory data) internal {
     _setImplementation(logic);
     _setFactory(factory);
     _setName(name);
@@ -665,14 +663,16 @@ contract __AdminUpgradeabilityProductProxy__ is __BaseAdminUpgradeabilityProxy__
     }
   }
   
-  function __AdminUpgradeabilityProductProxy_init__(address logic, address factory, bytes32 name, bytes memory data) external ifAdmin {
-    __AdminUpgradeabilityProductProxy_init(logic, factory, name, data);
-  }
-
   function _implementation() virtual override(BaseUpgradeabilityProxy, ProductProxy) internal view returns (address impl) {
     impl = BaseUpgradeabilityProxy._implementation();
     if(impl == address(0))
         impl = ProductProxy._implementation();
+  }
+}
+
+contract __AdminUpgradeabilityProductProxy__ is __InitializableAdminUpgradeabilityProductProxy__ {
+  constructor(address admin, address logic, address factory, bytes32 name, bytes memory data) public payable {
+    __InitializableAdminUpgradeabilityProductProxy_init__(admin, logic, factory, name, data);
   }
 }
 
@@ -1247,9 +1247,8 @@ interface IERC20 {
  * functions have been added to mitigate the well-known issues around setting
  * allowances. See {IERC20-approve}.
  */
-contract ERC20UpgradeSafe is Initializable, ContextUpgradeSafe, IERC20 {
+contract ERC20UpgradeSafe is ContextUpgradeSafe, IERC20 {
     using SafeMath for uint256;
-    using Address for address;
 
     mapping (address => uint256) internal _balances;
 
