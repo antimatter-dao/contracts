@@ -1957,26 +1957,26 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
             Put(put).mint_(sender, uint(dPut));
 
         if(dUnd < 0)
-            _transfer(sender, put, underlying, dUnd);
+            _transfer(sender, call, underlying, dUnd);
         if(dCur < 0)
-            _transfer(sender, call, currency, dCur);
+            _transfer(sender, put, currency, dCur);
         
         if(data.length > 0)
             IFlashSwapCallee(sender).onFlashSwap(sender, call, put, dCall, dPut, dUnd, dCur, data);
         
         if(dUnd > 0)
-            _transfer(sender, put, underlying, dUnd);
+            _transfer(sender, call, underlying, dUnd);
         if(dCur > 0)
-            _transfer(sender, call, currency, dCur);
+            _transfer(sender, put, currency, dCur);
         
         if(dCall < 0)
             Call(call).burn_(sender, uint(-dCall));
         if(dPut < 0)
             Put(put).burn_(sender, uint(-dPut));
         
-        //require(IERC20(underlying).balanceOf(put) >= totalUnd && IERC20(currency).balanceOf(call) >= totalCur, 'reserve less than expected');
+        //require(IERC20(underlying).balanceOf(call) >= totalUnd && IERC20(currency).balanceOf(put) >= totalCur, 'reserve less than expected');
         //emit Swap(sender, underlying, currency, priceFloor, priceCap, call, put, dCall, dPut, dUnd, dCur);
-        require(IERC20(underlying).balanceOf(put) >= priceFloor && IERC20(currency).balanceOf(call) >= priceCap, 'reserve less than expected');     // share priceFloor and priceCap instead of totalUnd and totalCur to avoid stack too deep errors 
+        require(IERC20(underlying).balanceOf(call) >= priceFloor && IERC20(currency).balanceOf(put) >= priceCap, 'reserve less than expected');     // share priceFloor and priceCap instead of totalUnd and totalCur to avoid stack too deep errors 
         emit Swap(sender, underlying, currency, Call(call).priceFloor(), Call(call).priceCap(), dCall, dPut, dUnd, dCur, data);
     }
     event Swap(address indexed sender, address indexed underlying, address indexed currency, uint priceFloor, uint priceCap, int dCall, int dPut, int dUnd, int dCur, bytes data);
@@ -2195,7 +2195,7 @@ contract Call is ERC20UpgradeSafe {
     }
     
     function withdraw_(address to, uint volume) external onlyFactory {
-        IERC20(currency).safeTransfer(to, volume);
+        IERC20(underlying).safeTransfer(to, volume);
     }
 
     function mint_(address _to, uint volume) external onlyFactory {
@@ -2265,7 +2265,7 @@ contract Put is ERC20UpgradeSafe, Constants {
     }
     
     function withdraw_(address to, uint volume) external onlyFactory {
-        IERC20(underlying).safeTransfer(to, volume);
+        IERC20(currency).safeTransfer(to, volume);
     }
 
     function mint_(address _to, uint volume) external onlyFactory {
