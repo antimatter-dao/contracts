@@ -2141,13 +2141,13 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
     function calc(uint priceFloor, uint priceCap, uint totalCall, uint totalPut) public pure returns (uint totalUnd, uint totalCur) {
         if(totalCall == 0 && totalPut == 0)
             return (0, 0);
-        //uint temp = totalCall.mul(totalPut).div(totalCall.add(totalPut)).mul(priceCap.sub(priceFloor)).div(1e18).mul(2);
+        //uint temp = totalCall.mul(totalPut).div(totalCall.add(totalPut)).mul(priceCap.sub(priceFloor)).div(1e18).mul(2);      // V1
         //totalUnd = temp.mul(totalCall).div(totalCall.mul(priceFloor).add(totalPut.mul(priceCap)).div(1e18));
         //totalCur = temp.mul(totalPut).div(totalCall.add(totalPut));
         
-        totalUnd = totalCall.mul(totalCall).add(totalPut.mul(totalPut)).div(1e18).mul(priceFloor).div(1e18).mul(priceCap);
-        totalUnd = totalCall.mul(totalCall).div(Math.sqrt(totalUnd)).mul(priceCap.sub(priceFloor)).div(1e18);
-        totalCur = totalPut.mul(totalPut).div(Math.sqrt(totalCall.mul(totalCall).add(totalPut.mul(totalPut)))).mul(priceCap.sub(priceFloor)).div(1e18);
+        totalCur = Math.sqrt(totalCall.mul(totalCall).add(totalPut.mul(totalPut)));
+        totalUnd = totalCall.mul(totalCall).div(totalCur).mul(priceCap.sub(priceFloor)).div(Math.sqrt(priceCap.mul(priceFloor)));
+        totalCur = totalPut.mul(totalPut).div(totalCur).mul(priceCap.sub(priceFloor)).div(1e18);
     }
     
     function calcDelta(uint priceFloor, uint priceCap, uint totalCall, uint totalPut, int dCall, int dPut) public pure returns (int dUnd, int dCur, uint totalUnd, uint totalCur) {
@@ -2181,7 +2181,7 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
     //}
 
     function calcPrice(uint price, uint priceFloor, uint priceCap, uint totalCall, uint totalPut) public pure returns (uint priceCall, uint pricePut, uint totalUnd, uint totalCur, uint totalValue) {
-        //price     = (priceFloor.mul(totalCall).add(priceCap.mul(totalPut))).div(totalCall.add(totalPut));
+        //price     = (priceFloor.mul(totalCall).add(priceCap.mul(totalPut))).div(totalCall.add(totalPut));                     // V1
         //uint dp2  = priceCap.sub(priceFloor).mul(2);
         //priceCall = dp2.mul(totalPut ).div(totalCall.add(totalPut)).mul(totalPut ).div(totalCall.add(totalPut));
         //pricePut  = dp2.mul(totalCall).div(totalCall.add(totalPut)).mul(totalCall).div(totalCall.add(totalPut));
@@ -2189,16 +2189,14 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         //amount    = priceCall.mul(totalCall).div(1e18);
         //value     = volume.mul(price).div(1e18).add(amount);
         
-        totalUnd = totalCall.mul(totalCall).add(totalPut.mul(totalPut)).div(1e18);      // share totalUnd instead of t1 to avoid stack too deep errors
-        totalUnd = Math.sqrt(totalUnd.mul(totalUnd).div(1e18).mul(totalUnd));
-        totalUnd = priceCap.sub(priceFloor).mul(1e18).div(totalUnd);
+        totalUnd = Math.sqrt(totalCall.mul(totalCall).add(totalPut.mul(totalPut)));     // share totalUnd instead of t1 to avoid stack too deep errors
         totalCur = price.mul(1e18).div(Math.sqrt(priceFloor.mul(priceCap)));            // share totalCur instead of t2 to avoid stack too deep errors
-        priceCall = totalCur.mul(2).sub(uint(1e18)).mul(totalPut).div(1e18).mul(totalPut).div(1e18);
-        priceCall = totalCur.mul(totalCall).div(1e18).mul(totalCall).div(1e18).add(priceCall);
-        priceCall = totalUnd.mul(totalCall).div(1e18).mul(priceCall).div(1e18);
-        pricePut = uint(2e18).sub(totalCur).mul(totalCall).div(1e18).mul(totalCall).div(1e18);
-        pricePut = totalPut.mul(totalPut).div(1e18).add(pricePut);
-        pricePut = totalUnd.mul(totalPut).div(1e18).mul(pricePut).div(1e18);
+        priceCall = totalCur.mul(2).sub(uint(1e18)).mul(totalPut).div(1e18).mul(totalPut);
+        priceCall = totalCur.mul(totalCall).div(1e18).mul(totalCall).add(priceCall);
+        priceCall = priceCall.div(totalUnd).mul(totalCall).div(totalUnd).mul(priceCap.sub(priceFloor)).div(totalUnd);
+        pricePut = uint(2e18).sub(totalCur).mul(totalCall).div(1e18).mul(totalCall);
+        pricePut = totalPut.mul(totalPut).add(pricePut);
+        pricePut = pricePut.div(totalUnd).mul(totalPut).div(totalUnd).mul(priceCap.sub(priceFloor)).div(totalUnd);
         (totalUnd, totalCur) = calc(priceFloor, priceCap, totalCall, totalPut);
         totalValue = totalUnd.mul(price).div(1e18).add(totalCur);
     }
