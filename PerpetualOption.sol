@@ -1784,28 +1784,21 @@ contract Configurable is Governable {
 }
 
 
-interface IWETH {
-    function deposit() external payable;
-    function transfer(address to, uint value) external returns (bool);
-    function withdraw(uint) external;
-}
-
-
-interface IFlashSwapCallee {
-    function onFlashSwap(address sender, address call, address put, int dCall, int dPut, int dUnd, int dCur, bytes memory data) external;
-}
-
-
 contract Constants {
     bytes32 internal constant _Call_            = 'Call';
     bytes32 internal constant _Put_             = 'Put';
     bytes32 internal constant _permissionless_  = 'permissionless';
     //bytes32 internal constant _feeRate_         = 'feeRate';
     bytes32 internal constant _feeTo_           = 'feeTo';
-    //bytes32 internal constant _uniswapRounter_  = 'uniswapRounter';
     bytes32 internal constant _WETH_            = 'WETH';
-
+    //bytes32 internal constant _swapFactory_     = 'swapFactory';
+    bytes32 internal constant _swapRouter_      = 'swapRouter';
+    bytes32 internal constant _deadline_        = 'deadline';
+    bytes32 internal constant _allowBurn_       = 'allowBurn';
+    
     uint256 internal constant MAX_FEE_RATE      = 0.10 ether;   // 10%
+    
+    string internal constant _slippage_too_high_   = 'slippage too high';
     
     //bytes internal constant NULL       = '';//new bytes(0);
     
@@ -1816,10 +1809,157 @@ contract Constants {
     //int256  internal constant MIN_INT256        = MAX_INT256 + 1;               // overflow is desired
 }
 
+
+contract Call is ERC20UpgradeSafe {
+    using SafeERC20 for IERC20;
+    using SafeMath for uint;
+    
+    address public factory;
+    address public underlying;
+    address public currency;
+    uint public priceFloor;
+    uint public priceCap;
+
+    function __Call_init(address _underlying, address _currency, uint _priceFloor, uint _priceCap) external initializer {
+        (string memory name, string memory symbol) = spellNameAndSymbol(_underlying, _currency, _priceFloor, _priceCap);
+        __ERC20_init(name, symbol);
+        _setupDecimals(ERC20UpgradeSafe(_underlying).decimals());
+
+        factory = _msgSender();
+        underlying = _underlying;
+        currency = _currency;
+        priceFloor = _priceFloor;
+        priceCap = _priceCap;
+    }
+    
+    function spellNameAndSymbol(address _underlying, address _currency, uint _priceFloor, uint _priceCap) public view returns (string memory name, string memory symbol) {
+        this;       _underlying;        _currency;      _priceFloor;        _priceCap;
+        //return ('AntiMatter.Finance ETH Perpetual Call Option Floor $1000 Cap $2000', '+ETH(1000$2000)');
+        //return('AntiMatter.Finance Perpetual Call Token', 'Call');
+        return('AntiMatter.Finance Perpetual Bull Token', 'Bull');
+    }
+
+    function setNameAndSymbol(string memory name, string memory symbol) external {
+        require(_msgSender() == Factory(factory).governor() || _msgSender() == __AdminUpgradeabilityProxy__(address(uint160(factory))).__admin__());
+        _name = name;
+        _symbol = symbol;
+    }
+
+    modifier onlyFactory {
+        require(_msgSender() == factory, 'Only Factory');
+        _;
+    }
+    
+    function withdraw_(address to, uint volume) external onlyFactory {
+        IERC20(underlying).safeTransfer(to, volume);
+    }
+
+    function mint_(address _to, uint volume) external onlyFactory {
+        _mint(_to, volume);
+    }
+    
+    function burn_(address _from, uint volume) external onlyFactory {
+        _burn(_from, volume);
+    }
+    
+    function mint(int volume, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
+        return Factory(factory).mintCall_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, volume, undMax, curMax);
+    }
+    
+    function burn(int volume, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
+        return Factory(factory).burnCall_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, volume, undMax, curMax);
+    }
+    function burnAll(int undMax, int curMax) external payable returns (int dUnd, int dCur) {
+        return Factory(factory).burnCall_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, int(balanceOf(_msgSender())), undMax, curMax);
+    }
+    
+    function attributes() public view returns (address _underlying, address _currency, uint _priceFloor, uint _priceCap) {
+        return (underlying, currency, priceFloor, priceCap);
+    }
+    
+    function calcPrice(uint price) public view returns (uint priceCall, uint pricePut, uint totalUnd, uint totalCur, uint totalValue) {
+        return Factory(factory).calcPrice2(price, address(this));
+    }
+}
+
+contract Put is ERC20UpgradeSafe {
+    using SafeERC20 for IERC20;
+    using SafeMath for uint;
+    
+    address public factory;
+    address public underlying;
+    address public currency;
+    uint public priceFloor;
+    uint public priceCap;
+
+    function __Put_init(address _underlying, address _currency, uint _priceFloor, uint _priceCap) external initializer {
+        (string memory name, string memory symbol) = spellNameAndSymbol(_underlying, _currency, _priceFloor, _priceCap);
+        __ERC20_init(name, symbol);
+        _setupDecimals(ERC20UpgradeSafe(_underlying).decimals());
+
+        factory = _msgSender();
+        underlying = _underlying;
+        currency = _currency;
+        priceFloor = _priceFloor;
+        priceCap = _priceCap;
+    }
+
+    function spellNameAndSymbol(address _underlying, address _currency, uint _priceFloor, uint _priceCap) public view returns (string memory name, string memory symbol) {
+        this;       _underlying;        _currency;      _priceFloor;        _priceCap;
+        //return ('AntiMatter.Finance ETH Perpetual Put Option Floor $1000 Cap $2000', '-ETH(1000$2000)');
+        //return('AntiMatter.Finance Perpetual Put Token', 'Put');
+        return('AntiMatter.Finance Perpetual Bear Token', 'Bear');
+    }
+
+    function setNameAndSymbol(string memory name, string memory symbol) external {
+        require(_msgSender() == Factory(factory).governor() || _msgSender() == __AdminUpgradeabilityProxy__(address(uint160(factory))).__admin__());
+        _name = name;
+        _symbol = symbol;
+    }
+
+    modifier onlyFactory {
+        require(_msgSender() == factory, 'Only Factory');
+        _;
+    }
+    
+    function withdraw_(address to, uint volume) external onlyFactory {
+        IERC20(currency).safeTransfer(to, volume);
+    }
+
+    function mint_(address _to, uint volume) external onlyFactory {
+        _mint(_to, volume);
+    }
+    
+    function burn_(address _from, uint volume) external onlyFactory {
+        _burn(_from, volume);
+    }
+    
+    function mint(int volume, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
+        return Factory(factory).mintPut_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, volume, undMax, curMax);
+    }
+    
+    function burn(int volume, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
+        return Factory(factory).burnPut_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, volume, undMax, curMax);
+    }
+    function burnAll(int undMax, int curMax) external payable returns (int dUnd, int dCur) {
+        return Factory(factory).burnPut_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, int(balanceOf(_msgSender())), undMax, curMax);
+    }
+    
+    function attributes() public view returns (address _underlying, address _currency, uint _priceFloor, uint _priceCap) {
+        return (underlying, currency, priceFloor, priceCap);
+    }
+    
+    function calcPrice(uint price) public view returns (uint priceCall, uint pricePut, uint totalUnd, uint totalCur, uint totalValue) {
+        return Factory(factory).calcPrice2(price, address(this));
+    }
+}
+
+
 contract Factory is Configurable, ContextUpgradeSafe, Constants {
     using SafeERC20 for IERC20;
     using SafeMath for uint;
     using SafeMath for int;
+    using Address for address;
 
     mapping(bytes32 => address) public productImplementations;
     mapping(address => mapping(address => mapping(uint => mapping(uint => address)))) public calls;     // _underlying => _currency => _priceFloor => _priceCap => call
@@ -1875,18 +2015,20 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
 
     }
 
-    function __Factory_init(address governor, address implCall, address implPut, address WETH, address feeTo) public initializer {
+    function __Factory_init(address governor, address implCall, address implPut, address feeTo/*, address swapRouter*/) public initializer {
         __Governable_init_unchained(governor);
+        __Context_init_unchained();
         __ReentrancyGuard_init_unchained();
-        __Factory_init_unchained(implCall, implPut, WETH, feeTo);
+        __Factory_init_unchained(implCall, implPut, feeTo/*, swapRouter*/);
     }
 
-    function __Factory_init_unchained(address implCall, address implPut, address WETH, address feeTo) public governance {
+    function __Factory_init_unchained(address implCall, address implPut, address feeTo/*, address swapRouter*/) public governance {
         productImplementations[_Call_]  = implCall;
         productImplementations[_Put_]   = implPut;
-        config[_WETH_]                  = uint(WETH);
-        //config[_uniswapRounter_]        = uint(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
         setFee(0.005 ether, feeTo);     // 0.5%
+        //config[_swapRouter_]            = uint(swapRouter);
+        //config[_WETH_]                  = uint(IUniswapV2Router01(swapRouter).WETH());
+        //config[_deadline_]              = 30 minutes;
     }
     
     function upgradeProductImplementationsTo(address implCall, address implPut) external governance {
@@ -1909,6 +2051,7 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
     function createOption(address underlying, address currency, uint priceFloor, uint priceCap) public returns (address call_, address put) {
         require(underlying != currency, 'IDENTICAL_ADDRESSES');
         require(underlying != address(0) && currency != address(0), 'ZERO_ADDRESS');
+        require(underlying.isContract() && currency.isContract(), 'underlying and currency should isContract');
         require(priceFloor < priceCap, 'priceCap should biger than priceFloor');
         require(config[_permissionless_] != 0 || _msgSender() == governor);
 
@@ -1935,7 +2078,7 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         emit CreateOption(_msgSender(), underlying, currency, priceFloor, priceCap, call_, put, allCalls.length);
     }
     event CreateOption(address indexed creator, address indexed underlying, address indexed currency, uint priceFloor, uint priceCap, address call, address put, uint count);
-    
+/*        
         //if(dCur > 0) {
         //    IERC20(currency).safeTransferFrom(sender, put, uint(dCur));
         //    IERC20(currency).safeTransferFrom(sender, address(config[_feeTo_]), uint(dCur).mul(feeRate).div(1e18));
@@ -1945,13 +2088,14 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         //    Put(put).withdraw_(sender, uint(-dCur).sub(fee));
         //}
     function _transfer(address payable sender, address callOrPut, address undOrCur, int vol) internal {
+        address WETH_ = address(config[_WETH_]);
         if(vol > 0) {
             address from = sender;
             uint fee = uint(vol).mul(feeRate).div(1e18);
-            if(msg.value > 0 && undOrCur == address(config[_WETH_])) {
+            if(msg.value > 0 && undOrCur == WETH_) {
                 uint deltaAndFee = uint(vol).add(fee);
                 require(msg.value >= deltaAndFee, 'msg.value not enough');
-                IWETH(config[_WETH_]).deposit{value: deltaAndFee}();
+                IWETH(WETH_).deposit{value: deltaAndFee}();
                 if(msg.value > deltaAndFee)
                     sender.transfer(msg.value - deltaAndFee);
                 from = address(this);
@@ -1967,35 +2111,105 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
             uint fee = uint(-vol).mul(feeRate).div(1e18);
             Call(callOrPut).withdraw_(address(config[_feeTo_]), fee);
             address to = sender;
-            if(undOrCur == address(config[_WETH_]))
+            if(undOrCur == address(WETH_))
                 to = address(this);
             uint v = uint(-vol).sub(fee);
             Call(callOrPut).withdraw_(to, v);
             if(to == address(this)) {
-                IWETH(config[_WETH_]).withdraw(v);
+                IWETH(WETH_).withdraw(v);
                 sender.transfer(v);
             }
         }
     }
     
+    function _transfer(address payable sender, address callOrPut, address undOrCur, int vol, int max, address[] memory path) internal {
+        address WETH_ = address(config[_WETH_]);
+        IUniswapV2Router01 router = IUniswapV2Router01(config[_swapRouter_]);
+        uint deadline = now.add(config[_deadline_]);
+        uint fee = Math.abs(vol).mul(feeRate).div(1e18);
+        if(vol > 0) {
+            uint v = uint(vol).add(fee);
+            if(path.length == 0) {
+                require(int(v) <= max, _slippage_too_high_);
+                if(msg.value > 0 && undOrCur == WETH_) {
+                    require(msg.value >= v, 'msg.value not enough');
+                    IWETH(WETH_).deposit{value: v}();
+                    if(msg.value > v)
+                        sender.transfer(msg.value - v);
+                    IERC20(undOrCur).safeTransfer(callOrPut, v);
+                } else 
+                    IERC20(undOrCur).safeTransferFrom(sender, callOrPut, v);
+            } else {
+                require(path[path.length - 1] == undOrCur, 'INVALID_PATH');
+                if(msg.value > 0 && path[0] == WETH_) {
+                    uint balance = address(this).balance;
+                    router.swapETHForExactTokens{value: msg.value}(v, path, callOrPut, deadline);
+                    if(address(this).balance > balance)
+                        sender.transfer(address(this).balance - balance);
+                } else {
+                    uint amount = router.getAmountsIn(v, path)[0];
+                    IERC20(path[0]).safeTransferFrom(sender, address(this), amount);
+                    IERC20(path[0]).approve(address(router), amount);
+                    router.swapTokensForExactTokens(v, uint(-max), path, callOrPut, deadline);
+                }
+            }
+        } else if(vol < 0) {
+            uint v = uint(-vol).sub(fee);
+            Call(callOrPut).withdraw_(undOrCur == WETH_ || path.length > 0 ? address(this) : sender, v);
+            if(path.length == 0) {
+                require(-int(v) <= max, _slippage_too_high_);
+                if(undOrCur == WETH_) {
+                    IWETH(WETH_).withdraw(v);
+                    sender.transfer(v);
+                }
+            } else {
+                path = revertPath(path);
+                require(path[0] == undOrCur, 'INVALID_PATH');
+                IERC20(undOrCur).approve(address(router), v);
+                if(path[path.length - 1] == WETH_)
+                    router.swapExactTokensForETH(   v, uint(-max), path, sender, deadline);
+                else
+                    router.swapExactTokensForTokens(v, uint(-max), path, sender, deadline);
+            }
+        }
+        Call(callOrPut).withdraw_(address(config[_feeTo_]), fee);
+    }
+    
+    function revertPath(address[] memory path) public pure returns (address[] memory r) {
+        r = new address[](path.length);
+        for(uint i=0; i<path.length; i++)
+            r[i] = path[path.length-i-1];
+    }
+    
     function _checkMistakeETH(address payable sender, address underlying, address currency, int dUnd, int dCur) internal {
-        address WETH = address(config[_WETH_]);
-        if(msg.value > 0 && ((underlying != WETH && currency != WETH) || (underlying == WETH && dUnd <= 0) || (currency == WETH && dCur <= 0)))
+        address WETH_ = address(config[_WETH_]);
+        if(msg.value > 0 && ((underlying != WETH_ && currency != WETH_) || (underlying == WETH_ && dUnd <= 0) || (currency == WETH_ && dCur <= 0)))
+            sender.transfer(msg.value);
+    }
+
+    function _checkMistakeETH(address payable sender, address underlying, address currency, int dUnd, int dCur, address[] calldata undPath, address[] calldata curPath) internal {
+        address WETH_ = address(config[_WETH_]);
+        if(!(msg.value == 0
+            || (undPath.length > 0 && undPath[0] == WETH_ && dUnd > 0)
+            || (curPath.length > 0 && curPath[0] == WETH_ && dCur > 0)
+            || (undPath.length == 0 && underlying == WETH_ && dUnd > 0)
+            || (curPath.length == 0 && currency == WETH_ && dCur > 0))
+        )
             sender.transfer(msg.value);
     }
     
-    function swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, bytes memory data) public payable returns (address call, address put, int dUnd, int dCur) {
+    function swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, bytes memory data) external payable returns (address call, address put, int dUnd, int dCur) {
         return _swap(_msgSender(), underlying, currency, priceFloor, priceCap, dCall, dPut, undMax, curMax, data);
     }
-    function swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax) internal returns (address call, address put, int dUnd, int dCur) {
-        return _swap(_msgSender(), underlying, currency, priceFloor, priceCap, dCall, dPut, undMax, curMax);
-    }
-
-    function _swap(address payable sender, address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax) internal returns (address call, address put, int dUnd, int dCur) {
-        (call, put, dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, dCall, dPut, undMax, curMax, '');
-        emit Swap(sender, underlying, currency, priceFloor, priceCap, call, put, dCall, dPut, dUnd, dCur);
-    }
-    event Swap(address indexed sender, address indexed underlying, address indexed currency, uint priceFloor, uint priceCap, address call, address put, int dCall, int dPut, int dUnd, int dCur);
+    //function swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax) internal returns (address call, address put, int dUnd, int dCur) {
+    //    return _swap(_msgSender(), underlying, currency, priceFloor, priceCap, dCall, dPut, undMax, curMax);
+    //}
+    //
+    //function _swap(address payable sender, address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax) internal returns (address call, address put, int dUnd, int dCur) {
+    //    (call, put, dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, dCall, dPut, undMax, curMax, '');
+    //    emit Swap(sender, underlying, currency, priceFloor, priceCap, call, put, dCall, dPut, dUnd, dCur);
+    //}
+    //event Swap(address indexed sender, address indexed underlying, address indexed currency, uint priceFloor, uint priceCap, address call, address put, int dCall, int dPut, int dUnd, int dCur);
 
     function _swap(address payable sender, address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, bytes memory data) internal nonReentrant returns (address call, address put, int dUnd, int dCur) {
         call = calls[underlying][currency][priceFloor][priceCap];
@@ -2007,7 +2221,7 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         //uint totalCur;    // share priceCap   instead of totalCur to avoid stack too deep errors
         //(dUnd, dCur, totalUnd, totalCur) = calcDelta(priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply(), dCall, dPut);
         (dUnd, dCur, priceFloor, priceCap) = calcDelta(priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply(), dCall, dPut);
-        require(SafeMath.add_(dUnd, Math.abs(dUnd).mul(feeRate).div(1e18)) <= undMax && SafeMath.add_(dCur, Math.abs(dCur).mul(feeRate).div(1e18)) <= curMax, 'slippage too high');
+        require(dUnd.add_(Math.abs(dUnd).mul(feeRate).div(1e18)) <= undMax && dCur.add_(Math.abs(dCur).mul(feeRate).div(1e18)) <= curMax, _slippage_too_high_);
         _checkMistakeETH(sender, underlying, currency, dUnd, dCur);
 
         if(dCall > 0)
@@ -2021,7 +2235,7 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
             _transfer(sender, put, currency, dCur);
         
         if(data.length > 0)
-            IFlashSwapCallee(sender).onFlashSwap(sender, call, put, dCall, dPut, dUnd, dCur, data);
+            _onFlashSwap(sender, call, put, dCall, dPut, dUnd, dCur, data);
         
         if(dUnd > 0)
             _transfer(sender, call, underlying, dUnd);
@@ -2038,7 +2252,179 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         require(IERC20(underlying).balanceOf(call) >= priceFloor && IERC20(currency).balanceOf(put) >= priceCap, 'reserve less than expected');     // share priceFloor and priceCap instead of totalUnd and totalCur to avoid stack too deep errors 
         emit Swap(sender, underlying, currency, Call(call).priceFloor(), Call(call).priceCap(), dCall, dPut, dUnd, dCur, data);
     }
+*/        
+    function swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, bytes memory data) external payable returns (address call, address put, int dUnd, int dCur) {
+        return _swap(_msgSender(), underlying, currency, priceFloor, priceCap, dCall, dPut, undMax, curMax, data);
+    }
+    
+    function _swap(address payable sender, address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, bytes memory data) internal nonReentrant returns (address call, address put, int dUnd, int dCur) {
+        call = calls[underlying][currency][priceFloor][priceCap];
+        put  = puts [underlying][currency][priceFloor][priceCap];
+        if(put == address(0))                                                                      // single check is sufficient
+            (call, put) = createOption(underlying, currency, priceFloor, priceCap);
+        
+        //uint totalUnd;    // share priceFloor instead of totalUnd to avoid stack too deep errors
+        //uint totalCur;    // share priceCap   instead of totalCur to avoid stack too deep errors
+        //(dUnd, dCur, totalUnd, totalCur) = calcDelta(priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply(), dCall, dPut);
+        (dUnd, dCur, priceFloor, priceCap) = calcDelta(priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply(), dCall, dPut);
+        require(data.length > 0 || dUnd.add_(Math.abs(dUnd).mul(feeRate).div(1e18)) <= undMax && dCur.add_(Math.abs(dCur).mul(feeRate).div(1e18)) <= curMax, _slippage_too_high_);
+        Call(call).withdraw_(address(config[_feeTo_]), Math.abs(dUnd).mul(feeRate).div(1e18));
+        Put( put ).withdraw_(address(config[_feeTo_]), Math.abs(dCur).mul(feeRate).div(1e18));
+        {
+            address[4] memory tos = _decodeTos(sender, data);
+
+            if(dCall > 0)
+                Call(call).mint_(tos[0], uint(dCall));
+            if(dPut > 0)
+                Put( put ).mint_(tos[1], uint(dPut ));
+
+            if(dUnd < 0)
+                Call(call).withdraw_(tos[2], uint(-dUnd).sub(uint(-dUnd).mul(feeRate).div(1e18)));
+            if(dCur < 0)
+                Put( put ).withdraw_(tos[3], uint(-dCur).sub(uint(-dCur).mul(feeRate).div(1e18)));
+        }
+        if(data.length > 0) {
+            //_onFlashSwap(call, put, dCall, dPut, dUnd, dCur, data);
+            IFlashSwapCallee(_msgSender()).onFlashSwap{value: msg.value}(call, put, dCall, dPut, dUnd, dCur, data);
+            (priceFloor, priceCap) = calc(Call(call).priceFloor(), Call(call).priceCap(), Call(call).totalSupply(), Put(put).totalSupply());
+        } else {
+            if(dUnd > 0)
+                _transferFrom(sender, call, underlying, dUnd);
+            if(dCur > 0)
+                _transferFrom(sender, put,  currency,   dCur);
+            
+            if(dCall < 0)
+                Call(call).burn_(sender, uint(-dCall));
+            if(dPut < 0)
+                Put( put ).burn_(sender, uint(-dPut ));
+                
+            if(msg.value > 0)
+                sender.transfer(msg.value);
+        }
+
+        //require(IERC20(underlying).balanceOf(call) >= totalUnd && IERC20(currency).balanceOf(put) >= totalCur, 'reserve less than expected');
+        //emit Swap(sender, underlying, currency, priceFloor, priceCap, call, put, dCall, dPut, dUnd, dCur);
+        require(IERC20(underlying).balanceOf(call) >= priceFloor && IERC20(currency).balanceOf(put) >= priceCap, 'reserve less than expected');     // share priceFloor and priceCap instead of totalUnd and totalCur to avoid stack too deep errors 
+        emit Swap(sender, underlying, currency, Call(call).priceFloor(), Call(call).priceCap(), dCall, dPut, dUnd, dCur, data);
+    }
     event Swap(address indexed sender, address indexed underlying, address indexed currency, uint priceFloor, uint priceCap, int dCall, int dPut, int dUnd, int dCur, bytes data);
+
+    function _decodeTos(address payable sender, bytes memory data) internal pure returns (address[4] memory) {
+        return data.length > 0 ? abi.decode(data, (address[4])) : [address(sender), address(sender), address(sender), address(sender)];
+    }
+    
+    //function _onFlashSwap(address payable sender, address call, address put, int dCall, int dPut, int dUnd, int dCur, bytes memory data) internal {
+    //    IFlashSwapCallee(_msgSender()).onFlashSwap{value: msg.value}(call, put, dCall, dPut, dUnd, dCur, data);
+    //}
+
+    function _transferFrom(address sender, address callOrPut, address undOrCur, int vol) internal {
+        IERC20(undOrCur).safeTransferFrom(sender, callOrPut, uint(vol).add(uint(vol).mul(feeRate).div(1e18)));
+    }
+    
+/*
+    struct SwapRouteParam {
+        address underlying;
+        address currency;
+        uint priceFloor;
+        uint priceCap;
+        int dCall;
+        int dPut;
+        int undMax;
+        int curMax;
+        bytes data;
+        address[] undPath;
+        address[] curPath;
+    }
+    
+    function swapRoute(SwapRouteParam calldata s) external payable nonReentrant returns (address call, address put, int dUnd, int dCur) {
+        call = calls[s.underlying][s.currency][s.priceFloor][s.priceCap];
+        put  = puts [s.underlying][s.currency][s.priceFloor][s.priceCap];
+        if(call == address(0))                                                                      // single check is sufficient
+            (call, put) = createOption(s.underlying, s.currency, s.priceFloor, s.priceCap);
+        {
+        uint totalUnd;    // share s.priceFloor instead of totalUnd to avoid stack too deep errors
+        uint totalCur;    // share s.priceCap   instead of totalCur to avoid stack too deep errors
+        (dUnd, dCur, totalUnd, totalCur) = calcDelta(s.priceFloor, s.priceCap, Call(call).totalSupply(), Put(put).totalSupply(), s.dCall, s.dPut);
+        //(dUnd, dCur, s.priceFloor, s.priceCap) = calcDelta(s.priceFloor, s.priceCap, Call(call).totalSupply(), Put(put).totalSupply(), s.dCall, s.dPut);
+        //require(dUnd.add_(Math.abs(dUnd).mul(feeRate).div(1e18)) <= s.undMax && dCur.add_(Math.abs(dCur).mul(feeRate).div(1e18)) <= maxes[1], _slippage_too_high_);
+        _checkMistakeETH(_msgSender(), s.underlying, s.currency, dUnd, dCur, s.undPath, s.curPath);
+
+        if(s.dCall > 0)
+            Call(call).mint_(_msgSender(), uint(s.dCall));
+        if(s.dPut > 0)
+            Put(put).mint_(_msgSender(), uint(s.dPut));
+
+        if(dUnd < 0)
+            _transfer(_msgSender(), call, s.underlying, dUnd, s.undMax, s.undPath);
+        if(dCur < 0)
+            _transfer(_msgSender(), put, s.currency, dCur, s.curMax, s.curPath);
+        
+        if(s.data.length > 0)
+            IFlashSwapCallee(_msgSender()).onFlashSwap{value: msg.value}(_msgSender(), call, put, s.dCall, s.dPut, dUnd, dCur, s.data);
+        
+        if(dUnd > 0)
+            _transfer(_msgSender(), call, s.underlying, dUnd, s.undMax, s.undPath);
+        if(dCur > 0)
+            _transfer(_msgSender(), put, s.currency, dCur, s.curMax, s.curPath);
+        
+        if(s.dCall < 0)
+            Call(call).burn_(_msgSender(), uint(-s.dCall));
+        if(s.dPut < 0)
+            Put(put).burn_(_msgSender(), uint(-s.dPut));
+        
+        require(IERC20(s.underlying).balanceOf(call) >= totalUnd && IERC20(s.currency).balanceOf(put) >= totalCur, 'reserve less than expected');
+        }
+        emit Swap(_msgSender(), s.underlying, s.currency, s.priceFloor, s.priceCap, s.dCall, s.dPut, dUnd, dCur, s.data);
+        //require(IERC20(s.underlying).balanceOf(call) >= s.priceFloor && IERC20(s.currency).balanceOf(put) >= s.priceCap, 'reserve less than expected');     // share s.priceFloor and s.priceCap instead of totalUnd and totalCur to avoid stack too deep errors 
+        //emit Swap(_msgSender(), s.underlying, s.currency, Call(call).priceFloor(), Call(call).priceCap(), s.dCall, s.dPut, dUnd, dCur, s.data);
+    }
+
+    function swapRoute(address[2] calldata und_cur, uint[2] memory floor_cap, int[2] calldata dCallPut, int[2] calldata maxes, bytes calldata data, address[] calldata undPath, address[] calldata curPath) external payable nonReentrant returns (address[2] memory call_put, int[2] memory dUndCur) {
+        call_put[0] = calls[und_cur[0]][und_cur[1]][floor_cap[0]][floor_cap[1]];
+        call_put[1] = puts [und_cur[0]][und_cur[1]][floor_cap[0]][floor_cap[1]];
+        if(call_put[0] == address(0))                                                                      // single check is sufficient
+            (call_put[0], call_put[1]) = createOption(und_cur[0], und_cur[1], floor_cap[0], floor_cap[1]);
+        
+        //uint totalUnd;    // share floor_cap[0] instead of totalUnd to avoid stack too deep errors
+        //uint totalCur;    // share floor_cap[1]   instead of totalCur to avoid stack too deep errors
+        //(dUndCur[0], dCur, totalUnd, totalCur) = calcDelta(floor_cap[0], floor_cap[1], Call(call_put[0]).totalSupply(), Put(put).totalSupply(), dCallPut[0], dPut);
+        (dUndCur, floor_cap) = _calcDelta2(floor_cap, Call(call_put[0]).totalSupply(), Put(call_put[1]).totalSupply(), dCallPut);
+        //require(SafeMath.add_(dUndCur[0], Math.abs(dUndCur[0]).mul(feeRate).div(1e18)) <= maxes[0] && SafeMath.add_(dUndCur[1], Math.abs(dUndCur[1]).mul(feeRate).div(1e18)) <= maxes[1], _slippage_too_high_);
+        _checkMistakeETH(_msgSender(), und_cur[0], und_cur[1], dUndCur[0], dUndCur[1], undPath, curPath);
+
+        if(dCallPut[0] > 0)
+            Call(call_put[0]).mint_(_msgSender(), uint(dCallPut[0]));
+        if(dCallPut[1] > 0)
+            Put(call_put[1]).mint_(_msgSender(), uint(dCallPut[1]));
+
+        if(dUndCur[0] < 0)
+            _transfer(_msgSender(), call_put[0], und_cur[0], dUndCur[0], maxes[0], undPath);
+        if(dUndCur[1] < 0)
+            _transfer(_msgSender(), call_put[1], und_cur[1], dUndCur[1], maxes[1], curPath);
+        
+        if(data.length > 0)
+            _onFlashSwapRoute(_msgSender(), call_put, dCallPut, dUndCur, data);
+        
+        if(dUndCur[0] > 0)
+            _transfer(_msgSender(), call_put[0], und_cur[0], dUndCur[0], maxes[0], undPath);
+        if(dUndCur[1] > 0)
+            _transfer(_msgSender(), call_put[1], und_cur[1], dUndCur[1], maxes[1], curPath);
+        
+        if(dCallPut[0] < 0)
+            Call(call_put[0]).burn_(_msgSender(), uint(-dCallPut[0]));
+        if(dCallPut[1] < 0)
+            Put(call_put[1]).burn_(_msgSender(), uint(-dCallPut[1]));
+        
+        //require(IERC20(und_cur[0]).balanceOf(call_put[0]) >= totalUnd && IERC20(und_cur[1]).balanceOf(put) >= totalCur, 'reserve less than expected');
+        //emit Swap(_msgSender(), und_cur[0], und_cur[1], floor_cap[0], floor_cap[1], call_put[0], put, dCallPut[0], dCallPut[1], dUndCur[0], dUndCur[1]);
+        require(IERC20(und_cur[0]).balanceOf(call_put[0]) >= floor_cap[0] && IERC20(und_cur[1]).balanceOf(call_put[1]) >= floor_cap[1], 'reserve less than expected');     // share floor_cap[0] and floor_cap[1] instead of totalUnd and totalCur to avoid stack too deep errors 
+        emit SwapRoute(_msgSender(), und_cur, Call(call_put[0]).priceFloor(), Call(call_put[0]).priceCap(), dCallPut, dUndCur, data);
+    }
+    event SwapRoute(address indexed sender, address[2] indexed und_cur, uint priceFloor, uint priceCap, int[2] dCallPut, int[2] dUndCur, bytes data);
+    
+    function _onFlashSwapRoute(address sender, address[2] memory call_put, int[2] calldata dCallPut, int[2] memory dUndCur, bytes memory data) internal {
+        IFlashSwapCallee(_msgSender()).onFlashSwap{value: msg.value}(sender, call_put[0], call_put[1], dCallPut[0], dCallPut[1], dUndCur[0], dUndCur[1], data);        
+    }
 
     function _swap2(address undFrom, address curFrom, address underlying, address currency, uint priceFloor, uint priceCap, int volCall, int volPut, int undMax, int curMax) internal returns (address call, address put, int dUnd, int dCur) {
         call = calls[underlying][currency][priceFloor][priceCap];
@@ -2088,24 +2474,24 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
     function mintCall(address call, int volCall, int undMax, int curMax) public payable returns (int dUnd, int dCur) {
         (address underlying, address currency, uint priceFloor, uint priceCap) = Call(call).attributes();
         (, , dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, volCall, 0, undMax, curMax);
-    }
+    }*/
     function mintCall_(address payable sender, address underlying, address currency, uint priceFloor, uint priceCap, int volCall, int undMax, int curMax) public payable returns (int dUnd, int dCur) {
-        require(msg.sender == calls[underlying][currency][priceFloor][priceCap], 'Only Call');
-        (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, volCall, 0, undMax, curMax);
+        require(_msgSender() == calls[underlying][currency][priceFloor][priceCap], 'Only Call');
+        (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, volCall, 0, undMax, curMax, '');
     }
-
+/*
     function mintPut4(address underlying, address currency, uint priceFloor, uint priceCap, int volPut, int undMax, int curMax) public payable returns (address put, int dUnd, int dCur) {
         (, put, dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax);
     }
     function mintPut(address put, int volPut, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
         (address underlying, address currency, uint priceFloor, uint priceCap) = Put(put).attributes();
         (, , dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax);
-    }
+    }*/
     function mintPut_(address payable sender, address underlying, address currency, uint priceFloor, uint priceCap, int volPut, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        require(msg.sender == puts[underlying][currency][priceFloor][priceCap], 'Only Put');
-        (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax);
+        require(_msgSender() == puts[underlying][currency][priceFloor][priceCap], 'Only Put');
+        (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax, '');
     }
-
+/*
     function burn4(address underlying, address currency, uint priceFloor, uint priceCap, int volCall, int volPut, int undMax, int curMax) public payable returns (address call, address put, int dUnd, int dCur) {
         return swap(underlying, currency, priceFloor, priceCap, volCall, volPut, undMax, curMax);
     }
@@ -2120,22 +2506,27 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
     function burnCall(address call, int volCall, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
         (address underlying, address currency, uint priceFloor, uint priceCap) = Call(call).attributes();
         (, , dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, volCall, undMax, curMax, curMax);
-    }
+    }*/
     function burnCall_(address payable sender, address underlying, address currency, uint priceFloor, uint priceCap, int volCall, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        require(msg.sender == calls[underlying][currency][priceFloor][priceCap], 'Only Call');
-        (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, volCall, undMax, curMax, curMax);
+        require(_msgSender() == calls[underlying][currency][priceFloor][priceCap], 'Only Call');
+        (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, volCall, undMax, curMax, curMax, '');
     }
-
+/*
     function burnPut4(address underlying, address currency, uint priceFloor, uint priceCap, int volPut, int undMax, int curMax) public payable returns (address put, int dUnd, int dCur) {
         (, put, dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax);
     }
     function burnPut(address put, int volPut, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
         (address underlying, address currency, uint priceFloor, uint priceCap) = Put(put).attributes();
         (, , dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax);
-    }
+    }*/
     function burnPut_(address payable sender, address underlying, address currency, uint priceFloor, uint priceCap, int volPut, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        require(msg.sender == puts[underlying][currency][priceFloor][priceCap], 'Only Put');
-        (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax);
+        require(_msgSender() == puts[underlying][currency][priceFloor][priceCap], 'Only Put');
+        (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax, '');
+    }
+    
+    function burnCallorPut_(address payable sender, address callOrPut, uint vol) external {
+        require(getConfigA(_allowBurn_, _msgSender()) != 0, 'Not allowBurn');
+        Call(callOrPut).burn_(sender, vol);
     }
 
     function calc(uint priceFloor, uint priceCap, uint totalCall, uint totalPut) public pure returns (uint totalUnd, uint totalCur) {
@@ -2157,28 +2548,15 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         dCur = totalCur.sub_(oldCur);
     }
 
+    //function _calcDelta2(uint[2] memory floor_cap, uint totalCall, uint totalPut, int[2] calldata dCallPut) internal pure returns (int[2] memory dUndCur, uint[2] memory totalUndCur) {
+    //    (dUndCur[0], dUndCur[1], totalUndCur[0], totalUndCur[1]) = calcDelta(floor_cap[0], floor_cap[1], totalCall, totalPut, dCallPut[0], dCallPut[1]);
+    //}
+
     function calcDeltaWithFeeAndSlippage(uint priceFloor, uint priceCap, uint totalCall, uint totalPut, int dCall, int dPut, uint slippage) public view returns (int undMax, int curMax, uint totalUnd, uint totalCur) {
         (undMax, curMax, totalUnd, totalCur) = calcDelta(priceFloor, priceCap, totalCall, totalPut, dCall, dPut);
         undMax = SafeMath.add_(undMax, Math.abs(undMax).mul(feeRate.add(slippage)).div(1e18));
         curMax = SafeMath.add_(curMax, Math.abs(curMax).mul(feeRate.add(slippage)).div(1e18));
     }
-
-    //function calcDelta(uint priceFloor, uint priceCap, uint totalCall, uint totalPut, uint incCall, uint incPut, uint decCall, uint decPut) public pure returns (uint incUnd, uint incCur, uint decUnd, uint decCur, uint totalUnd, uint totalCur) {
-    //    (decUnd, decCur) = calc(priceFloor, priceCap, totalCall, totalPut);     // share decUnd, decCur instead of oldTotalUnd, oldTotalCur to avoid stack too deep errors
-    //    totalCall = totalCall.add(incCall).sub(decCall);
-    //    totalPut = totalPut.add(incPut).sub(decPut);
-    //    (totalUnd, totalCur) = calc(priceFloor, priceCap, totalCall, totalPut);
-    //    if(totalUnd > decUnd) {
-    //        incUnd = totalUnd.sub(decUnd);
-    //        decUnd = 0;
-    //    } else
-    //        decUnd = decUnd.sub(totalUnd);
-    //    if(totalCur > decCur) {
-    //        incCur = totalCur.sub(decCur);
-    //        decCur = 0;
-    //    } else
-    //        decCur = decCur.sub(totalCur);
-    //}
 
     function calcPrice(uint price, uint priceFloor, uint priceCap, uint totalCall, uint totalPut) public pure returns (uint priceCall, uint pricePut, uint totalUnd, uint totalCur, uint totalValue) {
         //price     = (priceFloor.mul(totalCall).add(priceCap.mul(totalPut))).div(totalCall.add(totalPut));                     // V1
@@ -2208,12 +2586,12 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
             return (0, 0, 0, 0, 0);
         return calcPrice(price, priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply());
     }
-    
+
     function calcPrice2(uint price, address callOrPut) public view returns (uint priceCall, uint pricePut, uint totalUnd, uint totalCur, uint totalValue) {
         (address underlying, address currency, uint priceFloor, uint priceCap) = Call(callOrPut).attributes();
         return calcPrice5(price, underlying, currency, priceFloor, priceCap);
     }
-    
+        
     function priceTo18(uint _price, uint8 underlyingDecimals, uint8 currencyDecimals) public pure returns (uint) {
         return _price.mul(10 ** uint256(underlyingDecimals)).div(10 ** uint256(currencyDecimals));
     }
@@ -2230,142 +2608,302 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
 }
 
 
-contract Call is ERC20UpgradeSafe {
+interface IFlashSwapCallee {
+    function onFlashSwap(address call, address put, int dCall, int dPut, int dUnd, int dCur, bytes memory data) external payable;
+}
+
+
+contract Router is Configurable, ContextUpgradeSafe, Constants {
     using SafeERC20 for IERC20;
     using SafeMath for uint;
-    
+    using SafeMath for int;
+
     address public factory;
-    address public underlying;
-    address public currency;
-    uint public priceFloor;
-    uint public priceCap;
-
-    function __Call_init(address _underlying, address _currency, uint _priceFloor, uint _priceCap) external initializer {
-        (string memory name, string memory symbol) = spellNameAndSymbol(_underlying, _currency, _priceFloor, _priceCap);
-        __ERC20_init(name, symbol);
-        _setupDecimals(ERC20UpgradeSafe(_underlying).decimals());
-
-        factory = _msgSender();
-        underlying = _underlying;
-        currency = _currency;
-        priceFloor = _priceFloor;
-        priceCap = _priceCap;
-    }
+    address public swapFactory;
+    address public swapRouter;
+    address public WETH;
     
-    function spellNameAndSymbol(address _underlying, address _currency, uint _priceFloor, uint _priceCap) public view returns (string memory name, string memory symbol) {
-        //return ('AntiMatter.Finance ETH Perpetual Call Option Floor $1000 Cap $2000', '+ETH(1000$2000)');
-        return('AntiMatter.Finance Perpetual Call Token', 'Call');
-    }
-
-    function setNameAndSymbol(string memory name, string memory symbol) external {
-        require(_msgSender() == Factory(factory).governor());
-        _name = name;
-        _symbol = symbol;
-    }
-
-    modifier onlyFactory {
-        require(_msgSender() == factory, 'Only Factory');
+    modifier ensure(uint deadline) {
+        require(deadline >= block.timestamp, 'Router: EXPIRED');
         _;
     }
-    
-    function withdraw_(address to, uint volume) external onlyFactory {
-        IERC20(underlying).safeTransfer(to, volume);
+
+    function __Router_init(address governor_, address factory_, address swapRouter_) public initializer {
+        __Governable_init_unchained(governor_);
+        __Context_init_unchained();
+        //__ReentrancyGuard_init_unchained();
+        __Router_init_unchained(factory_, swapRouter_);
     }
 
-    function mint_(address _to, uint volume) external onlyFactory {
-        _mint(_to, volume);
+    function __Router_init_unchained(address factory_, address swapRouter_) public governance {
+        factory  = factory_;
+        swapFactory = IUniswapV2Router01(swapRouter_).factory();
+        swapRouter = swapRouter_;
+        WETH = IUniswapV2Router01(swapRouter_).WETH();
+        config[_deadline_] = 30 minutes;
     }
     
-    function burn_(address _from, uint volume) external onlyFactory {
-        _burn(_from, volume);
+    function calcDeltaRoute(uint priceFloor, uint priceCap, uint totalCall, uint totalPut, int dCall, int dPut, uint slippage, address[] memory undPath, address[] memory curPath) public view returns (int undMax, int curMax, uint totalUnd, uint totalCur) {
+        (undMax, curMax, totalUnd, totalCur) = Factory(factory).calcDeltaWithFeeAndSlippage(priceFloor, priceCap, totalCall, totalPut, dCall, dPut, slippage);
+        undMax = calcAmountRoute(undMax, undPath);
+        curMax = calcAmountRoute(curMax, curPath);
     }
     
-    function mint(int volume, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        return Factory(factory).mintCall_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, volume, undMax, curMax);
+    function calcAmountRoute(int amount, address[] memory path) public view returns (int) {
+        if(path.length > 0)
+            if(amount > 0)
+                return int(IUniswapV2Router01(swapRouter).getAmountsIn(uint(amount), path)[0]);
+            else if(amount < 0)
+                return -int(IUniswapV2Router01(swapRouter).getAmountsOut(uint(-amount), revertPath(path))[path.length-1]);
+        return amount;
     }
     
-    function burn(int volume, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        return Factory(factory).burnCall_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, volume, undMax, curMax);
-    }
-    function burnAll(int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        return Factory(factory).burnCall_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, int(balanceOf(_msgSender())), undMax, curMax);
+    // requires the initial amount to have already been sent to the first pair
+    function _route(uint[] memory amounts, address[] memory path, address _to) internal {    // virtual 
+        for (uint i; i < path.length - 1; i++) {
+            (address input, address output) = (path[i], path[i + 1]);
+            (address token0,) = input < output ? (input, output) : (output, input);
+            uint amountOut = amounts[i + 1];
+            (uint amount0Out, uint amount1Out) = input == token0 ? (uint(0), amountOut) : (amountOut, uint(0));
+            address to = i < path.length - 2 ? IUniswapV2Factory(swapFactory).getPair(output, path[i + 2]) : _to;
+            IUniswapV2Pair(IUniswapV2Factory(swapFactory).getPair(input, output)).swap(
+                amount0Out, amount1Out, to, new bytes(0)
+            );
+        }
     }
     
-    function attributes() public view returns (address _underlying, address _currency, uint _priceFloor, uint _priceCap) {
-        return (underlying, currency, priceFloor, priceCap);
+    function _routeIn(address payable sender, uint amountOut, uint amountInMax, address[] memory path, address to, uint deadline) internal ensure(deadline) returns (uint[] memory amounts) {           // virtual override 
+        address WETH_ = WETH;
+        amounts = IUniswapV2Router01(swapRouter).getAmountsIn(amountOut, path);
+        require(amounts[0] <= amountInMax, 'Router: EXCESSIVE_INPUT_AMOUNT');
+        address pair0 = IUniswapV2Factory(swapFactory).getPair(path[0], path[1]);
+        if(msg.value > 0 && path[0] == WETH_) {
+            require(msg.value >= amounts[0], 'msg.value not enough');
+            IWETH(WETH_).deposit{value: amounts[0]}();
+            if(msg.value > amounts[0])
+                sender.transfer(msg.value - amounts[0]);
+            IERC20(path[0]).safeTransfer(pair0, amounts[0]);
+        } else
+            IERC20(path[0]).safeTransferFrom(sender, pair0, amounts[0]);
+        _route(amounts, path, to);
     }
     
-    function calcPrice(uint price) public view returns (uint priceCall, uint pricePut, uint totalUnd, uint totalCur, uint totalValue) {
-        return Factory(factory).calcPrice2(price, address(this));
+    function _routeOut(uint amountIn, uint amountOutMin, address[] memory path, address payable to, uint deadline) internal ensure(deadline) returns (uint[] memory amounts) {           // virtual override 
+        address WETH_ = WETH;
+        amounts = IUniswapV2Router01(swapRouter).getAmountsOut(amountIn, path);
+        uint amount = amounts[amounts.length - 1];
+        require(amount >= amountOutMin, 'Router: INSUFFICIENT_OUTPUT_AMOUNT');
+        if(path[path.length-1] == WETH_) {
+            _route(amounts, path, address(this));
+            IWETH(WETH_).withdraw(amount);
+            to.transfer(amount);
+        } else
+            _route(amounts, path, to);
+    }
+    
+    function _transfer(address payable sender, address callOrPut, address undOrCur, int vol, int max, address[] memory path) internal {
+        address WETH_ = WETH;
+        uint deadline = now.add(config[_deadline_]);
+        uint fee = Math.abs(vol).mul(Factory(factory).feeRate()).div(1e18);
+        if(vol > 0) {
+            uint v = uint(vol).add(fee);
+            if(path.length == 0) {
+                require(int(v) <= max, _slippage_too_high_);
+                if(msg.value > 0 && undOrCur == WETH_) {
+                    require(msg.value >= v, 'msg.value not enough');
+                    IWETH(WETH_).deposit{value: v}();
+                    if(msg.value > v)
+                        sender.transfer(msg.value - v);
+                    IERC20(undOrCur).safeTransfer(callOrPut, v);
+                } else 
+                    IERC20(undOrCur).safeTransferFrom(sender, callOrPut, v);
+            } else {
+                require(path[path.length - 1] == undOrCur, 'INVALID_PATH');
+                _routeIn(sender, v, uint(-max), path, callOrPut, deadline);
+            }
+        } else if(vol < 0) {
+            uint v = uint(-vol).sub(fee);
+            if(path.length == 0) {
+                require(-int(v) <= max, _slippage_too_high_);
+                if(undOrCur == WETH_) {
+                    IWETH(WETH_).withdraw(v);
+                    sender.transfer(v);
+                }
+            } else {
+                path = revertPath(path);
+                require(path[0] == undOrCur, 'INVALID_PATH');
+                _routeOut(v, uint(-max), path, (path[path.length-1] == WETH_ ? address(uint160(address(this))) : sender), deadline);
+            }
+        }
+    }
+    
+    function revertPath(address[] memory path) public pure returns (address[] memory r) {
+        r = new address[](path.length);
+        for(uint i=0; i<path.length; i++)
+            r[i] = path[path.length-i-1];
+    }
+    
+    function _checkMistakeETH(address payable sender, address underlying, address currency, int dUnd, int dCur, address[] memory undPath, address[] memory curPath) internal {
+        address WETH_ = WETH;
+        if(!(msg.value == 0
+            || (undPath.length > 0 && undPath[0] == WETH_ && dUnd > 0)
+            || (curPath.length > 0 && curPath[0] == WETH_ && dCur > 0)
+            || (undPath.length == 0 && underlying == WETH_ && dUnd > 0)
+            || (curPath.length == 0 && currency == WETH_ && dCur > 0))
+        )
+            sender.transfer(msg.value);
+    }
+    
+    function _msgDataWithoutSelector() internal view returns (bytes memory data) {
+        data = new bytes(_msgData().length - 4);
+        assembly {
+            calldatacopy(add(data, 0x20), 4, sub(calldatasize(), 4))
+        }
+    }
+    
+    function _genData() internal view returns (bytes memory data) {
+        (address underlying, address currency, , , , , int undMax, int curMax, address[] memory undPath, address[] memory curPath) = abi.decode(_msgDataWithoutSelector(), (address, address, uint, uint, int, int, int, int, address[], address[]));
+        address undTo = undPath.length > 0 ? IUniswapV2Factory(swapFactory).getPair(undPath[undPath.length-1], undPath[undPath.length-2]) : underlying == WETH ? address(this) : _msgSender();
+        address curTo = curPath.length > 0 ? IUniswapV2Factory(swapFactory).getPair(curPath[curPath.length-1], curPath[curPath.length-2]) : currency   == WETH ? address(this) : _msgSender();
+        return abi.encode([_msgSender(), _msgSender(), undTo, curTo], underlying, currency, undMax, curMax, undPath, curPath);
+    }
+    
+    function swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, address[] memory undPath, address[] memory curPath) external payable returns (address call, address put, int dUnd, int dCur) {
+        undPath;        curPath;
+        return _swap(underlying, currency, priceFloor, priceCap, dCall, dPut, undMax, curMax, _genData());
+    }
+
+    function _swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, bytes memory data) internal returns (address call, address put, int dUnd, int dCur) {
+        return Factory(factory).swap{value: msg.value}(underlying, currency, priceFloor, priceCap, dCall, dPut, undMax, curMax, data);
+    }
+    
+    function onFlashSwap(address call, address put, int dCall, int dPut, int dUnd, int dCur, bytes memory data) external payable {
+        require(_msgSender() == factory, 'only Factory');
+        address payable sender = abi.decode(data, (address));
+        {
+        ( , address underlying, address currency, int undMax, int curMax, address[] memory undPath, address[] memory curPath) = abi.decode(data, (address[4], address, address, int, int, address[], address[]));
+        _checkMistakeETH(sender, underlying, currency, dUnd, dCur, undPath, curPath);
+
+        _transfer(sender, call, underlying, dUnd, undMax, undPath);
+        _transfer(sender, put,  currency,   dCur, curMax, curPath);
+        }
+        if(dCall < 0)
+            Factory(factory).burnCallorPut_(sender, call, uint(-dCall));
+        if(dPut < 0)
+            Factory(factory).burnCallorPut_(sender, put , uint(-dPut ));
     }
 }
 
-contract Put is ERC20UpgradeSafe, Constants {
-    using SafeERC20 for IERC20;
-    using SafeMath for uint;
-    
-    address public factory;
-    address public underlying;
-    address public currency;
-    uint public priceFloor;
-    uint public priceCap;
 
-    function __Put_init(address _underlying, address _currency, uint _priceFloor, uint _priceCap) external initializer {
-        (string memory name, string memory symbol) = spellNameAndSymbol(_underlying, _currency, _priceFloor, _priceCap);
-        __ERC20_init(name, symbol);
-        _setupDecimals(ERC20UpgradeSafe(_underlying).decimals());
+interface IWETH {
+    function deposit() external payable;
+    function transfer(address to, uint value) external returns (bool);
+    function withdraw(uint) external;
+}
 
-        factory = _msgSender();
-        underlying = _underlying;
-        currency = _currency;
-        priceFloor = _priceFloor;
-        priceCap = _priceCap;
-    }
+interface IUniswapV2Pair {
+    event Approval(address indexed owner, address indexed spender, uint value);
+    event Transfer(address indexed from, address indexed to, uint value);
 
-    function spellNameAndSymbol(address _underlying, address _currency, uint _priceFloor, uint _priceCap) public view returns (string memory name, string memory symbol) {
-        //return ('AntiMatter.Finance ETH Perpetual Put Option Floor $1000 Cap $2000', '-ETH(1000$2000)');
-        return('AntiMatter.Finance Perpetual Put Token', 'Put');
-    }
+    function name() external pure returns (string memory);
+    function symbol() external pure returns (string memory);
+    function decimals() external pure returns (uint8);
+    function totalSupply() external view returns (uint);
+    function balanceOf(address owner) external view returns (uint);
+    function allowance(address owner, address spender) external view returns (uint);
 
-    function setNameAndSymbol(string memory name, string memory symbol) external {
-        require(_msgSender() == Factory(factory).governor());
-        _name = name;
-        _symbol = symbol;
-    }
+    function approve(address spender, uint value) external returns (bool);
+    function transfer(address to, uint value) external returns (bool);
+    function transferFrom(address from, address to, uint value) external returns (bool);
 
-    modifier onlyFactory {
-        require(_msgSender() == factory, 'Only Factory');
-        _;
-    }
-    
-    function withdraw_(address to, uint volume) external onlyFactory {
-        IERC20(currency).safeTransfer(to, volume);
-    }
+    function DOMAIN_SEPARATOR() external view returns (bytes32);
+    function PERMIT_TYPEHASH() external pure returns (bytes32);
+    function nonces(address owner) external view returns (uint);
 
-    function mint_(address _to, uint volume) external onlyFactory {
-        _mint(_to, volume);
-    }
-    
-    function burn_(address _from, uint volume) external onlyFactory {
-        _burn(_from, volume);
-    }
-    
-    function mint(int volume, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        return Factory(factory).mintPut_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, volume, undMax, curMax);
-    }
-    
-    function burn(int volume, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        return Factory(factory).burnPut_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, volume, undMax, curMax);
-    }
-    function burnAll(int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        return Factory(factory).burnPut_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, int(balanceOf(_msgSender())), undMax, curMax);
-    }
-    
-    function attributes() public view returns (address _underlying, address _currency, uint _priceFloor, uint _priceCap) {
-        return (underlying, currency, priceFloor, priceCap);
-    }
-    
-    function calcPrice(uint price) public view returns (uint priceCall, uint pricePut, uint totalUnd, uint totalCur, uint totalValue) {
-        return Factory(factory).calcPrice2(price, address(this));
-    }
+    function permit(address owner, address spender, uint value, uint deadline, uint8 v, bytes32 r, bytes32 s) external;
+
+    event Mint(address indexed sender, uint amount0, uint amount1);
+    event Burn(address indexed sender, uint amount0, uint amount1, address indexed to);
+    event Swap(
+        address indexed sender,
+        uint amount0In,
+        uint amount1In,
+        uint amount0Out,
+        uint amount1Out,
+        address indexed to
+    );
+    event Sync(uint112 reserve0, uint112 reserve1);
+
+    function MINIMUM_LIQUIDITY() external pure returns (uint);
+    function factory() external view returns (address);
+    function token0() external view returns (address);
+    function token1() external view returns (address);
+    function getReserves() external view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast);
+    function price0CumulativeLast() external view returns (uint);
+    function price1CumulativeLast() external view returns (uint);
+    function kLast() external view returns (uint);
+
+    function mint(address to) external returns (uint liquidity);
+    function burn(address to) external returns (uint amount0, uint amount1);
+    function swap(uint amount0Out, uint amount1Out, address to, bytes calldata data) external;
+    function skim(address to) external;
+    function sync() external;
+
+    function initialize(address, address) external;
+}
+
+interface IUniswapV2Factory {
+    event PairCreated(address indexed token0, address indexed token1, address pair, uint);
+
+    function feeTo() external view returns (address);
+    function feeToSetter() external view returns (address);
+
+    function getPair(address tokenA, address tokenB) external view returns (address pair);
+    function allPairs(uint) external view returns (address pair);
+    function allPairsLength() external view returns (uint);
+
+    function createPair(address tokenA, address tokenB) external returns (address pair);
+
+    function setFeeTo(address) external;
+    function setFeeToSetter(address) external;
+}
+
+interface IUniswapV2Router01 {
+    function factory() external pure returns (address);
+    function WETH() external pure returns (address);
+
+    function swapExactTokensForTokens(
+        uint amountIn,
+        uint amountOutMin,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external returns (uint[] memory amounts);
+    function swapTokensForExactTokens(
+        uint amountOut,
+        uint amountInMax,
+        address[] calldata path,
+        address to,
+        uint deadline
+    ) external returns (uint[] memory amounts);
+    function swapExactETHForTokens(uint amountOutMin, address[] calldata path, address to, uint deadline)
+        external
+        payable
+        returns (uint[] memory amounts);
+    function swapTokensForExactETH(uint amountOut, uint amountInMax, address[] calldata path, address to, uint deadline)
+        external
+        returns (uint[] memory amounts);
+    function swapExactTokensForETH(uint amountIn, uint amountOutMin, address[] calldata path, address to, uint deadline)
+        external
+        returns (uint[] memory amounts);
+    function swapETHForExactTokens(uint amountOut, address[] calldata path, address to, uint deadline)
+        external
+        payable
+        returns (uint[] memory amounts);
+
+    function quote(uint amountA, uint reserveA, uint reserveB) external pure returns (uint amountB);
+    function getAmountOut(uint amountIn, uint reserveIn, uint reserveOut) external pure returns (uint amountOut);
+    function getAmountIn(uint amountOut, uint reserveIn, uint reserveOut) external pure returns (uint amountIn);
+    function getAmountsOut(uint amountIn, address[] calldata path) external view returns (uint[] memory amounts);
+    function getAmountsIn(uint amountOut, address[] calldata path) external view returns (uint[] memory amounts);
 }
