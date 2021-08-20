@@ -1,3 +1,7 @@
+/**
+ *Submitted for verification at Etherscan.io on 2021-08-17
+*/
+
 // SPDX-License-Identifier: MIT
 
 pragma solidity ^0.6.0;
@@ -1794,7 +1798,7 @@ contract Constants {
     //bytes32 internal constant _swapFactory_     = 'swapFactory';
     bytes32 internal constant _swapRouter_      = 'swapRouter';
     bytes32 internal constant _deadline_        = 'deadline';
-    bytes32 internal constant _allowBurn_       = 'allowBurn';
+    //bytes32 internal constant _allowBurn_       = 'allowBurn';    // V2.1
     
     uint256 internal constant MAX_FEE_RATE      = 0.10 ether;   // 10%
     
@@ -2078,7 +2082,139 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         emit CreateOption(_msgSender(), underlying, currency, priceFloor, priceCap, call_, put, allCalls.length);
     }
     event CreateOption(address indexed creator, address indexed underlying, address indexed currency, uint priceFloor, uint priceCap, address call, address put, uint count);
-/*        
+
+/* V2.0      
+    struct SwapRouteParam {
+        address underlying;
+        address currency;
+        uint priceFloor;
+        uint priceCap;
+        int dCall;
+        int dPut;
+        int undMax;
+        int curMax;
+        bytes data;
+        address[] undPath;
+        address[] curPath;
+    }
+    
+    function swapRoute(SwapRouteParam calldata s) external payable nonReentrant returns (address call, address put, int dUnd, int dCur) {
+        call = calls[s.underlying][s.currency][s.priceFloor][s.priceCap];
+        put  = puts [s.underlying][s.currency][s.priceFloor][s.priceCap];
+        if(call == address(0))                                                                      // single check is sufficient
+            (call, put) = createOption(s.underlying, s.currency, s.priceFloor, s.priceCap);
+        {
+        uint totalUnd;    // share s.priceFloor instead of totalUnd to avoid stack too deep errors
+        uint totalCur;    // share s.priceCap   instead of totalCur to avoid stack too deep errors
+        (dUnd, dCur, totalUnd, totalCur) = calcDelta(s.priceFloor, s.priceCap, Call(call).totalSupply(), Put(put).totalSupply(), s.dCall, s.dPut);
+        //(dUnd, dCur, s.priceFloor, s.priceCap) = calcDelta(s.priceFloor, s.priceCap, Call(call).totalSupply(), Put(put).totalSupply(), s.dCall, s.dPut);
+        //require(dUnd.add_(Math.abs(dUnd).mul(feeRate).div(1e18)) <= s.undMax && dCur.add_(Math.abs(dCur).mul(feeRate).div(1e18)) <= maxes[1], _slippage_too_high_);
+        _checkMistakeETH(_msgSender(), s.underlying, s.currency, dUnd, dCur, s.undPath, s.curPath);
+
+        if(s.dCall > 0)
+            Call(call).mint_(_msgSender(), uint(s.dCall));
+        if(s.dPut > 0)
+            Put(put).mint_(_msgSender(), uint(s.dPut));
+
+        if(dUnd < 0)
+            _transfer(_msgSender(), call, s.underlying, dUnd, s.undMax, s.undPath);
+        if(dCur < 0)
+            _transfer(_msgSender(), put, s.currency, dCur, s.curMax, s.curPath);
+        
+        if(s.data.length > 0)
+            IFlashSwapCallee(_msgSender()).onFlashSwap{value: msg.value}(_msgSender(), call, put, s.dCall, s.dPut, dUnd, dCur, s.data);
+        
+        if(dUnd > 0)
+            _transfer(_msgSender(), call, s.underlying, dUnd, s.undMax, s.undPath);
+        if(dCur > 0)
+            _transfer(_msgSender(), put, s.currency, dCur, s.curMax, s.curPath);
+        
+        if(s.dCall < 0)
+            Call(call).burn_(_msgSender(), uint(-s.dCall));
+        if(s.dPut < 0)
+            Put(put).burn_(_msgSender(), uint(-s.dPut));
+        
+        require(IERC20(s.underlying).balanceOf(call) >= totalUnd && IERC20(s.currency).balanceOf(put) >= totalCur, 'reserve less than expected');
+        }
+        emit Swap(_msgSender(), s.underlying, s.currency, s.priceFloor, s.priceCap, s.dCall, s.dPut, dUnd, dCur, s.data);
+        //require(IERC20(s.underlying).balanceOf(call) >= s.priceFloor && IERC20(s.currency).balanceOf(put) >= s.priceCap, 'reserve less than expected');     // share s.priceFloor and s.priceCap instead of totalUnd and totalCur to avoid stack too deep errors 
+        //emit Swap(_msgSender(), s.underlying, s.currency, Call(call).priceFloor(), Call(call).priceCap(), s.dCall, s.dPut, dUnd, dCur, s.data);
+    }
+
+    function swapRoute(address[2] calldata und_cur, uint[2] memory floor_cap, int[2] calldata dCallPut, int[2] calldata maxes, bytes calldata data, address[] calldata undPath, address[] calldata curPath) external payable nonReentrant returns (address[2] memory call_put, int[2] memory dUndCur) {
+        call_put[0] = calls[und_cur[0]][und_cur[1]][floor_cap[0]][floor_cap[1]];
+        call_put[1] = puts [und_cur[0]][und_cur[1]][floor_cap[0]][floor_cap[1]];
+        if(call_put[0] == address(0))                                                                      // single check is sufficient
+            (call_put[0], call_put[1]) = createOption(und_cur[0], und_cur[1], floor_cap[0], floor_cap[1]);
+        
+        //uint totalUnd;    // share floor_cap[0] instead of totalUnd to avoid stack too deep errors
+        //uint totalCur;    // share floor_cap[1]   instead of totalCur to avoid stack too deep errors
+        //(dUndCur[0], dCur, totalUnd, totalCur) = calcDelta(floor_cap[0], floor_cap[1], Call(call_put[0]).totalSupply(), Put(put).totalSupply(), dCallPut[0], dPut);
+        (dUndCur, floor_cap) = _calcDelta2(floor_cap, Call(call_put[0]).totalSupply(), Put(call_put[1]).totalSupply(), dCallPut);
+        //require(SafeMath.add_(dUndCur[0], Math.abs(dUndCur[0]).mul(feeRate).div(1e18)) <= maxes[0] && SafeMath.add_(dUndCur[1], Math.abs(dUndCur[1]).mul(feeRate).div(1e18)) <= maxes[1], _slippage_too_high_);
+        _checkMistakeETH(_msgSender(), und_cur[0], und_cur[1], dUndCur[0], dUndCur[1], undPath, curPath);
+
+        if(dCallPut[0] > 0)
+            Call(call_put[0]).mint_(_msgSender(), uint(dCallPut[0]));
+        if(dCallPut[1] > 0)
+            Put(call_put[1]).mint_(_msgSender(), uint(dCallPut[1]));
+
+        if(dUndCur[0] < 0)
+            _transfer(_msgSender(), call_put[0], und_cur[0], dUndCur[0], maxes[0], undPath);
+        if(dUndCur[1] < 0)
+            _transfer(_msgSender(), call_put[1], und_cur[1], dUndCur[1], maxes[1], curPath);
+        
+        if(data.length > 0)
+            _onFlashSwapRoute(_msgSender(), call_put, dCallPut, dUndCur, data);
+        
+        if(dUndCur[0] > 0)
+            _transfer(_msgSender(), call_put[0], und_cur[0], dUndCur[0], maxes[0], undPath);
+        if(dUndCur[1] > 0)
+            _transfer(_msgSender(), call_put[1], und_cur[1], dUndCur[1], maxes[1], curPath);
+        
+        if(dCallPut[0] < 0)
+            Call(call_put[0]).burn_(_msgSender(), uint(-dCallPut[0]));
+        if(dCallPut[1] < 0)
+            Put(call_put[1]).burn_(_msgSender(), uint(-dCallPut[1]));
+        
+        //require(IERC20(und_cur[0]).balanceOf(call_put[0]) >= totalUnd && IERC20(und_cur[1]).balanceOf(put) >= totalCur, 'reserve less than expected');
+        //emit Swap(_msgSender(), und_cur[0], und_cur[1], floor_cap[0], floor_cap[1], call_put[0], put, dCallPut[0], dCallPut[1], dUndCur[0], dUndCur[1]);
+        require(IERC20(und_cur[0]).balanceOf(call_put[0]) >= floor_cap[0] && IERC20(und_cur[1]).balanceOf(call_put[1]) >= floor_cap[1], 'reserve less than expected');     // share floor_cap[0] and floor_cap[1] instead of totalUnd and totalCur to avoid stack too deep errors 
+        emit SwapRoute(_msgSender(), und_cur, Call(call_put[0]).priceFloor(), Call(call_put[0]).priceCap(), dCallPut, dUndCur, data);
+    }
+    event SwapRoute(address indexed sender, address[2] indexed und_cur, uint priceFloor, uint priceCap, int[2] dCallPut, int[2] dUndCur, bytes data);
+    
+    function _onFlashSwapRoute(address sender, address[2] memory call_put, int[2] calldata dCallPut, int[2] memory dUndCur, bytes memory data) internal {
+        IFlashSwapCallee(_msgSender()).onFlashSwap{value: msg.value}(sender, call_put[0], call_put[1], dCallPut[0], dCallPut[1], dUndCur[0], dUndCur[1], data);        
+    }
+
+    function _swap2(address undFrom, address curFrom, address underlying, address currency, uint priceFloor, uint priceCap, int volCall, int volPut, int undMax, int curMax) internal returns (address call, address put, int dUnd, int dCur) {
+        call = calls[underlying][currency][priceFloor][priceCap];
+        put  = puts [underlying][currency][priceFloor][priceCap];
+
+        if(volCall < 0)
+            Call(call).transferFrom(undFrom, address(this), uint(-volCall));
+        if(volPut < 0)
+            Put (put ).transferFrom(curFrom, address(this), uint(-volPut));
+        
+        if(undMax > 0)
+            IERC20(underlying).safeTransferFrom(undFrom, address(this), uint(undMax));
+        if(curMax > 0)
+            IERC20(currency  ).safeTransferFrom(curFrom, address(this), uint(curMax));
+        
+        (call, put, dUnd, dCur) = _swap(address(uint160(address(this))), underlying, currency, priceFloor, priceCap, volCall, volPut, undMax, curMax);
+        
+        if(Math.max_(0, undMax) > dUnd)
+            IERC20(underlying).safeTransfer(undFrom, uint(Math.max_(0, undMax).sub_(dUnd)));
+        if(Math.max_(0, curMax) > dCur)
+            IERC20(currency  ).safeTransfer(curFrom, uint(Math.max_(0, curMax).sub_(dCur)));
+        
+        if(volCall > 0)
+            Call(call).transfer(undFrom, uint(volCall));
+        if(volPut > 0)
+            Put (put ).transfer(curFrom, uint(volPut));
+    }
+
         //if(dCur > 0) {
         //    IERC20(currency).safeTransferFrom(sender, put, uint(dCur));
         //    IERC20(currency).safeTransferFrom(sender, address(config[_feeTo_]), uint(dCur).mul(feeRate).div(1e18));
@@ -2253,6 +2389,7 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         emit Swap(sender, underlying, currency, Call(call).priceFloor(), Call(call).priceCap(), dCall, dPut, dUnd, dCur, data);
     }
 */        
+/* V2.1
     function swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, bytes memory data) external payable returns (address call, address put, int dUnd, int dCur) {
         return _swap(_msgSender(), underlying, currency, priceFloor, priceCap, dCall, dPut, undMax, curMax, data);
     }
@@ -2266,10 +2403,9 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         //uint totalUnd;    // share priceFloor instead of totalUnd to avoid stack too deep errors
         //uint totalCur;    // share priceCap   instead of totalCur to avoid stack too deep errors
         //(dUnd, dCur, totalUnd, totalCur) = calcDelta(priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply(), dCall, dPut);
+        
         (dUnd, dCur, priceFloor, priceCap) = calcDelta(priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply(), dCall, dPut);
         require(data.length > 0 || dUnd.add_(Math.abs(dUnd).mul(feeRate).div(1e18)) <= undMax && dCur.add_(Math.abs(dCur).mul(feeRate).div(1e18)) <= curMax, _slippage_too_high_);
-        Call(call).withdraw_(address(config[_feeTo_]), Math.abs(dUnd).mul(feeRate).div(1e18));
-        Put( put ).withdraw_(address(config[_feeTo_]), Math.abs(dCur).mul(feeRate).div(1e18));
         {
             address[4] memory tos = _decodeTos(sender, data);
 
@@ -2283,11 +2419,9 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
             if(dCur < 0)
                 Put( put ).withdraw_(tos[3], uint(-dCur).sub(uint(-dCur).mul(feeRate).div(1e18)));
         }
-        if(data.length > 0) {
-            //_onFlashSwap(call, put, dCall, dPut, dUnd, dCur, data);
+        if(data.length > 0)
             IFlashSwapCallee(_msgSender()).onFlashSwap{value: msg.value}(call, put, dCall, dPut, dUnd, dCur, data);
-            (priceFloor, priceCap) = calc(Call(call).priceFloor(), Call(call).priceCap(), Call(call).totalSupply(), Put(put).totalSupply());
-        } else {
+        else {
             if(dUnd > 0)
                 _transferFrom(sender, call, underlying, dUnd);
             if(dCur > 0)
@@ -2301,9 +2435,15 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
             if(msg.value > 0)
                 sender.transfer(msg.value);
         }
+        Call(call).withdraw_(address(config[_feeTo_]), Math.abs(dUnd).mul(feeRate).div(1e18));
+        Put( put ).withdraw_(address(config[_feeTo_]), Math.abs(dCur).mul(feeRate).div(1e18));
+
+        if(data.length > 0)
+            (priceFloor, priceCap) = calc(Call(call).priceFloor(), Call(call).priceCap(), Call(call).totalSupply(), Put(put).totalSupply());
 
         //require(IERC20(underlying).balanceOf(call) >= totalUnd && IERC20(currency).balanceOf(put) >= totalCur, 'reserve less than expected');
         //emit Swap(sender, underlying, currency, priceFloor, priceCap, call, put, dCall, dPut, dUnd, dCur);
+        
         require(IERC20(underlying).balanceOf(call) >= priceFloor && IERC20(currency).balanceOf(put) >= priceCap, 'reserve less than expected');     // share priceFloor and priceCap instead of totalUnd and totalCur to avoid stack too deep errors 
         emit Swap(sender, underlying, currency, Call(call).priceFloor(), Call(call).priceCap(), dCall, dPut, dUnd, dCur, data);
     }
@@ -2320,139 +2460,63 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
     function _transferFrom(address sender, address callOrPut, address undOrCur, int vol) internal {
         IERC20(undOrCur).safeTransferFrom(sender, callOrPut, uint(vol).add(uint(vol).mul(feeRate).div(1e18)));
     }
-    
-/*
-    struct SwapRouteParam {
-        address underlying;
-        address currency;
-        uint priceFloor;
-        uint priceCap;
-        int dCall;
-        int dPut;
-        int undMax;
-        int curMax;
-        bytes data;
-        address[] undPath;
-        address[] curPath;
+*/  
+// V2.2
+    function swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, bytes memory data) external payable returns (address call, address put, int dUnd, int dCur) {
+        return _swap(_msgSender(), underlying, currency, priceFloor, priceCap, dCall, dPut, undMax, curMax, data);
     }
     
-    function swapRoute(SwapRouteParam calldata s) external payable nonReentrant returns (address call, address put, int dUnd, int dCur) {
-        call = calls[s.underlying][s.currency][s.priceFloor][s.priceCap];
-        put  = puts [s.underlying][s.currency][s.priceFloor][s.priceCap];
-        if(call == address(0))                                                                      // single check is sufficient
-            (call, put) = createOption(s.underlying, s.currency, s.priceFloor, s.priceCap);
-        {
-        uint totalUnd;    // share s.priceFloor instead of totalUnd to avoid stack too deep errors
-        uint totalCur;    // share s.priceCap   instead of totalCur to avoid stack too deep errors
-        (dUnd, dCur, totalUnd, totalCur) = calcDelta(s.priceFloor, s.priceCap, Call(call).totalSupply(), Put(put).totalSupply(), s.dCall, s.dPut);
-        //(dUnd, dCur, s.priceFloor, s.priceCap) = calcDelta(s.priceFloor, s.priceCap, Call(call).totalSupply(), Put(put).totalSupply(), s.dCall, s.dPut);
-        //require(dUnd.add_(Math.abs(dUnd).mul(feeRate).div(1e18)) <= s.undMax && dCur.add_(Math.abs(dCur).mul(feeRate).div(1e18)) <= maxes[1], _slippage_too_high_);
-        _checkMistakeETH(_msgSender(), s.underlying, s.currency, dUnd, dCur, s.undPath, s.curPath);
-
-        if(s.dCall > 0)
-            Call(call).mint_(_msgSender(), uint(s.dCall));
-        if(s.dPut > 0)
-            Put(put).mint_(_msgSender(), uint(s.dPut));
-
-        if(dUnd < 0)
-            _transfer(_msgSender(), call, s.underlying, dUnd, s.undMax, s.undPath);
-        if(dCur < 0)
-            _transfer(_msgSender(), put, s.currency, dCur, s.curMax, s.curPath);
-        
-        if(s.data.length > 0)
-            IFlashSwapCallee(_msgSender()).onFlashSwap{value: msg.value}(_msgSender(), call, put, s.dCall, s.dPut, dUnd, dCur, s.data);
-        
-        if(dUnd > 0)
-            _transfer(_msgSender(), call, s.underlying, dUnd, s.undMax, s.undPath);
-        if(dCur > 0)
-            _transfer(_msgSender(), put, s.currency, dCur, s.curMax, s.curPath);
-        
-        if(s.dCall < 0)
-            Call(call).burn_(_msgSender(), uint(-s.dCall));
-        if(s.dPut < 0)
-            Put(put).burn_(_msgSender(), uint(-s.dPut));
-        
-        require(IERC20(s.underlying).balanceOf(call) >= totalUnd && IERC20(s.currency).balanceOf(put) >= totalCur, 'reserve less than expected');
-        }
-        emit Swap(_msgSender(), s.underlying, s.currency, s.priceFloor, s.priceCap, s.dCall, s.dPut, dUnd, dCur, s.data);
-        //require(IERC20(s.underlying).balanceOf(call) >= s.priceFloor && IERC20(s.currency).balanceOf(put) >= s.priceCap, 'reserve less than expected');     // share s.priceFloor and s.priceCap instead of totalUnd and totalCur to avoid stack too deep errors 
-        //emit Swap(_msgSender(), s.underlying, s.currency, Call(call).priceFloor(), Call(call).priceCap(), s.dCall, s.dPut, dUnd, dCur, s.data);
-    }
-
-    function swapRoute(address[2] calldata und_cur, uint[2] memory floor_cap, int[2] calldata dCallPut, int[2] calldata maxes, bytes calldata data, address[] calldata undPath, address[] calldata curPath) external payable nonReentrant returns (address[2] memory call_put, int[2] memory dUndCur) {
-        call_put[0] = calls[und_cur[0]][und_cur[1]][floor_cap[0]][floor_cap[1]];
-        call_put[1] = puts [und_cur[0]][und_cur[1]][floor_cap[0]][floor_cap[1]];
-        if(call_put[0] == address(0))                                                                      // single check is sufficient
-            (call_put[0], call_put[1]) = createOption(und_cur[0], und_cur[1], floor_cap[0], floor_cap[1]);
-        
-        //uint totalUnd;    // share floor_cap[0] instead of totalUnd to avoid stack too deep errors
-        //uint totalCur;    // share floor_cap[1]   instead of totalCur to avoid stack too deep errors
-        //(dUndCur[0], dCur, totalUnd, totalCur) = calcDelta(floor_cap[0], floor_cap[1], Call(call_put[0]).totalSupply(), Put(put).totalSupply(), dCallPut[0], dPut);
-        (dUndCur, floor_cap) = _calcDelta2(floor_cap, Call(call_put[0]).totalSupply(), Put(call_put[1]).totalSupply(), dCallPut);
-        //require(SafeMath.add_(dUndCur[0], Math.abs(dUndCur[0]).mul(feeRate).div(1e18)) <= maxes[0] && SafeMath.add_(dUndCur[1], Math.abs(dUndCur[1]).mul(feeRate).div(1e18)) <= maxes[1], _slippage_too_high_);
-        _checkMistakeETH(_msgSender(), und_cur[0], und_cur[1], dUndCur[0], dUndCur[1], undPath, curPath);
-
-        if(dCallPut[0] > 0)
-            Call(call_put[0]).mint_(_msgSender(), uint(dCallPut[0]));
-        if(dCallPut[1] > 0)
-            Put(call_put[1]).mint_(_msgSender(), uint(dCallPut[1]));
-
-        if(dUndCur[0] < 0)
-            _transfer(_msgSender(), call_put[0], und_cur[0], dUndCur[0], maxes[0], undPath);
-        if(dUndCur[1] < 0)
-            _transfer(_msgSender(), call_put[1], und_cur[1], dUndCur[1], maxes[1], curPath);
-        
-        if(data.length > 0)
-            _onFlashSwapRoute(_msgSender(), call_put, dCallPut, dUndCur, data);
-        
-        if(dUndCur[0] > 0)
-            _transfer(_msgSender(), call_put[0], und_cur[0], dUndCur[0], maxes[0], undPath);
-        if(dUndCur[1] > 0)
-            _transfer(_msgSender(), call_put[1], und_cur[1], dUndCur[1], maxes[1], curPath);
-        
-        if(dCallPut[0] < 0)
-            Call(call_put[0]).burn_(_msgSender(), uint(-dCallPut[0]));
-        if(dCallPut[1] < 0)
-            Put(call_put[1]).burn_(_msgSender(), uint(-dCallPut[1]));
-        
-        //require(IERC20(und_cur[0]).balanceOf(call_put[0]) >= totalUnd && IERC20(und_cur[1]).balanceOf(put) >= totalCur, 'reserve less than expected');
-        //emit Swap(_msgSender(), und_cur[0], und_cur[1], floor_cap[0], floor_cap[1], call_put[0], put, dCallPut[0], dCallPut[1], dUndCur[0], dUndCur[1]);
-        require(IERC20(und_cur[0]).balanceOf(call_put[0]) >= floor_cap[0] && IERC20(und_cur[1]).balanceOf(call_put[1]) >= floor_cap[1], 'reserve less than expected');     // share floor_cap[0] and floor_cap[1] instead of totalUnd and totalCur to avoid stack too deep errors 
-        emit SwapRoute(_msgSender(), und_cur, Call(call_put[0]).priceFloor(), Call(call_put[0]).priceCap(), dCallPut, dUndCur, data);
-    }
-    event SwapRoute(address indexed sender, address[2] indexed und_cur, uint priceFloor, uint priceCap, int[2] dCallPut, int[2] dUndCur, bytes data);
-    
-    function _onFlashSwapRoute(address sender, address[2] memory call_put, int[2] calldata dCallPut, int[2] memory dUndCur, bytes memory data) internal {
-        IFlashSwapCallee(_msgSender()).onFlashSwap{value: msg.value}(sender, call_put[0], call_put[1], dCallPut[0], dCallPut[1], dUndCur[0], dUndCur[1], data);        
-    }
-
-    function _swap2(address undFrom, address curFrom, address underlying, address currency, uint priceFloor, uint priceCap, int volCall, int volPut, int undMax, int curMax) internal returns (address call, address put, int dUnd, int dCur) {
+    function _swap(address payable sender, address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, bytes memory data) internal nonReentrant returns (address call, address put, int dUnd, int dCur) {
         call = calls[underlying][currency][priceFloor][priceCap];
         put  = puts [underlying][currency][priceFloor][priceCap];
+        if(put == address(0))                                                                      // single check is sufficient
+            (call, put) = createOption(underlying, currency, priceFloor, priceCap);
+        
+        //uint totalUnd;    // share priceFloor instead of totalUnd to avoid stack too deep errors
+        //uint totalCur;    // share priceCap   instead of totalCur to avoid stack too deep errors
+        //(dUnd, dCur, totalUnd, totalCur) = calcDelta(priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply(), dCall, dPut);
+        
+        (dUnd, dCur, priceFloor, priceCap) = calcDelta(priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply(), dCall, dPut);
+        require(dUnd.add_(Math.abs(dUnd).mul(feeRate).div(1e18)) <= undMax && dCur.add_(Math.abs(dCur).mul(feeRate).div(1e18)) <= curMax, _slippage_too_high_);
+        
+        if(dCall > 0)
+            Call(call).mint_(sender, uint(dCall));
+        if(dPut > 0)
+            Put( put ).mint_(sender, uint(dPut ));
 
-        if(volCall < 0)
-            Call(call).transferFrom(undFrom, address(this), uint(-volCall));
-        if(volPut < 0)
-            Put (put ).transferFrom(curFrom, address(this), uint(-volPut));
+        if(dUnd < 0)
+            Call(call).withdraw_(sender, uint(-dUnd).sub(uint(-dUnd).mul(feeRate).div(1e18)));
+        if(dCur < 0)
+            Put( put ).withdraw_(sender, uint(-dCur).sub(uint(-dCur).mul(feeRate).div(1e18)));
+
+        if(data.length > 0)
+            IFlashSwapCallee(_msgSender()).onFlashSwap{value: msg.value}(call, put, dCall, dPut, dUnd, dCur, data);
+        else if(msg.value > 0)
+            sender.transfer(msg.value);
+
+        if(dCall < 0)
+            Call(call).burn_(sender, uint(-dCall));
+        if(dPut < 0)
+            Put( put ).burn_(sender, uint(-dPut ));
+
+        if(dUnd > 0) {
+            address under = underlying;
+            IERC20(under).safeTransferFrom(sender, call, uint(dUnd).add(uint(dUnd).mul(feeRate).div(1e18)));
+        }
+        if(dCur > 0)
+            IERC20(currency).safeTransferFrom(sender, put, uint(dCur).add(uint(dCur).mul(feeRate).div(1e18)));
         
-        if(undMax > 0)
-            IERC20(underlying).safeTransferFrom(undFrom, address(this), uint(undMax));
-        if(curMax > 0)
-            IERC20(currency  ).safeTransferFrom(curFrom, address(this), uint(curMax));
-        
-        (call, put, dUnd, dCur) = _swap(address(uint160(address(this))), underlying, currency, priceFloor, priceCap, volCall, volPut, undMax, curMax);
-        
-        if(Math.max_(0, undMax) > dUnd)
-            IERC20(underlying).safeTransfer(undFrom, uint(Math.max_(0, undMax).sub_(dUnd)));
-        if(Math.max_(0, curMax) > dCur)
-            IERC20(currency  ).safeTransfer(curFrom, uint(Math.max_(0, curMax).sub_(dCur)));
-        
-        if(volCall > 0)
-            Call(call).transfer(undFrom, uint(volCall));
-        if(volPut > 0)
-            Put (put ).transfer(curFrom, uint(volPut));
+        Call(call).withdraw_(address(config[_feeTo_]), Math.abs(dUnd).mul(feeRate).div(1e18));
+        Put( put ).withdraw_(address(config[_feeTo_]), Math.abs(dCur).mul(feeRate).div(1e18));
+
+        //require(IERC20(underlying).balanceOf(call) >= totalUnd && IERC20(currency).balanceOf(put) >= totalCur, 'reserve less than expected');
+        //emit Swap(sender, underlying, currency, priceFloor, priceCap, call, put, dCall, dPut, dUnd, dCur);
+
+        require(IERC20(underlying).balanceOf(call) >= priceFloor && IERC20(currency).balanceOf(put) >= priceCap, 'reserve less than expected');     // share priceFloor and priceCap instead of totalUnd and totalCur to avoid stack too deep errors 
+        emit Swap(sender, underlying, currency, Call(call).priceFloor(), Call(call).priceCap(), dCall, dPut, dUnd, dCur, data);
     }
-    
+    event Swap(address indexed sender, address indexed underlying, address indexed currency, uint priceFloor, uint priceCap, int dCall, int dPut, int dUnd, int dCur, bytes data);
+/*    
     function swap2_(address undFrom, address curFrom, address underlying, address currency, uint priceFloor, uint priceCap, int volCall, int volPut, int undMax, int curMax) external governance returns (address call, address put, int dUnd, int dCur) {
         uint oldFeeRate = feeRate;
         feeRate = 0;
@@ -2523,12 +2587,12 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         require(_msgSender() == puts[underlying][currency][priceFloor][priceCap], 'Only Put');
         (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax, '');
     }
-    
+/* V2.1    
     function burnCallorPut_(address payable sender, address callOrPut, uint vol) external {
         require(getConfigA(_allowBurn_, _msgSender()) != 0, 'Not allowBurn');
         Call(callOrPut).burn_(sender, vol);
     }
-
+*/
     function calc(uint priceFloor, uint priceCap, uint totalCall, uint totalPut) public pure returns (uint totalUnd, uint totalCur) {
         if(totalCall == 0 && totalPut == 0)
             return (0, 0);
@@ -2658,6 +2722,30 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
         return amount;
     }
     
+    function revertPath(address[] memory path) public pure returns (address[] memory r) {
+        r = new address[](path.length);
+        for(uint i=0; i<path.length; i++)
+            r[i] = path[path.length-i-1];
+    }
+    
+    function _checkMistakeETH(address payable sender, address underlying, address currency, int dUnd, int dCur, address[] memory undPath, address[] memory curPath) internal {
+        address WETH_ = WETH;
+        if(!(msg.value == 0
+            || (undPath.length > 0 && undPath[0] == WETH_ && dUnd > 0)
+            || (curPath.length > 0 && curPath[0] == WETH_ && dCur > 0)
+            || (undPath.length == 0 && underlying == WETH_ && dUnd > 0)
+            || (curPath.length == 0 && currency == WETH_ && dCur > 0))
+        )
+            sender.transfer(msg.value);
+    }
+    
+    function _msgDataWithoutSelector() internal view returns (bytes memory data) {
+        data = new bytes(_msgData().length - 4);
+        assembly {
+            calldatacopy(add(data, 0x20), 4, sub(calldatasize(), 4))
+        }
+    }
+    
     // requires the initial amount to have already been sent to the first pair
     function _route(uint[] memory amounts, address[] memory path, address _to) internal {    // virtual 
         for (uint i; i < path.length - 1; i++) {
@@ -2687,7 +2775,7 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
             IERC20(path[0]).safeTransferFrom(sender, pair0, amounts[0]);
         _route(amounts, path, to);
     }
-    
+/* V2.1               
     function _routeOut(uint amountIn, uint amountOutMin, address[] memory path, address payable to, uint deadline) internal ensure(deadline) returns (uint[] memory amounts) {           // virtual override 
         address WETH_ = WETH;
         amounts = IUniswapV2Router01(swapRouter).getAmountsOut(amountIn, path);
@@ -2700,12 +2788,25 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
         } else
             _route(amounts, path, to);
     }
-    
+
     function _transfer(address payable sender, address callOrPut, address undOrCur, int vol, int max, address[] memory path) internal {
         address WETH_ = WETH;
         uint deadline = now.add(config[_deadline_]);
         uint fee = Math.abs(vol).mul(Factory(factory).feeRate()).div(1e18);
-        if(vol > 0) {
+        if(vol < 0) {
+            uint v = uint(-vol).sub(fee);
+            if(path.length == 0) {
+                require(-int(v) <= max, _slippage_too_high_);
+                if(undOrCur == WETH_) {
+                    IWETH(WETH_).withdraw(v);
+                    sender.transfer(v);
+                }
+            } else {
+                path = revertPath(path);
+                require(path[0] == undOrCur, 'INVALID_PATH');
+                _routeOut(v, uint(-max), path, sender, deadline);
+            }
+        } else if(vol > 0) {
             uint v = uint(vol).add(fee);
             if(path.length == 0) {
                 require(int(v) <= max, _slippage_too_high_);
@@ -2721,53 +2822,16 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
                 require(path[path.length - 1] == undOrCur, 'INVALID_PATH');
                 _routeIn(sender, v, uint(-max), path, callOrPut, deadline);
             }
-        } else if(vol < 0) {
-            uint v = uint(-vol).sub(fee);
-            if(path.length == 0) {
-                require(-int(v) <= max, _slippage_too_high_);
-                if(undOrCur == WETH_) {
-                    IWETH(WETH_).withdraw(v);
-                    sender.transfer(v);
-                }
-            } else {
-                path = revertPath(path);
-                require(path[0] == undOrCur, 'INVALID_PATH');
-                _routeOut(v, uint(-max), path, (path[path.length-1] == WETH_ ? address(uint160(address(this))) : sender), deadline);
-            }
         }
     }
-    
-    function revertPath(address[] memory path) public pure returns (address[] memory r) {
-        r = new address[](path.length);
-        for(uint i=0; i<path.length; i++)
-            r[i] = path[path.length-i-1];
-    }
-    
-    function _checkMistakeETH(address payable sender, address underlying, address currency, int dUnd, int dCur, address[] memory undPath, address[] memory curPath) internal {
-        address WETH_ = WETH;
-        if(!(msg.value == 0
-            || (undPath.length > 0 && undPath[0] == WETH_ && dUnd > 0)
-            || (curPath.length > 0 && curPath[0] == WETH_ && dCur > 0)
-            || (undPath.length == 0 && underlying == WETH_ && dUnd > 0)
-            || (curPath.length == 0 && currency == WETH_ && dCur > 0))
-        )
-            sender.transfer(msg.value);
-    }
-    
-    function _msgDataWithoutSelector() internal view returns (bytes memory data) {
-        data = new bytes(_msgData().length - 4);
-        assembly {
-            calldatacopy(add(data, 0x20), 4, sub(calldatasize(), 4))
-        }
-    }
-    
+
     function _genData() internal view returns (bytes memory data) {
         (address underlying, address currency, , , , , int undMax, int curMax, address[] memory undPath, address[] memory curPath) = abi.decode(_msgDataWithoutSelector(), (address, address, uint, uint, int, int, int, int, address[], address[]));
         address undTo = undPath.length > 0 ? IUniswapV2Factory(swapFactory).getPair(undPath[undPath.length-1], undPath[undPath.length-2]) : underlying == WETH ? address(this) : _msgSender();
         address curTo = curPath.length > 0 ? IUniswapV2Factory(swapFactory).getPair(curPath[curPath.length-1], curPath[curPath.length-2]) : currency   == WETH ? address(this) : _msgSender();
         return abi.encode([_msgSender(), _msgSender(), undTo, curTo], underlying, currency, undMax, curMax, undPath, curPath);
     }
-    
+
     function swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, address[] memory undPath, address[] memory curPath) external payable returns (address call, address put, int dUnd, int dCur) {
         undPath;        curPath;
         return _swap(underlying, currency, priceFloor, priceCap, dCall, dPut, undMax, curMax, _genData());
@@ -2791,6 +2855,94 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
             Factory(factory).burnCallorPut_(sender, call, uint(-dCall));
         if(dPut < 0)
             Factory(factory).burnCallorPut_(sender, put , uint(-dPut ));
+    }
+*/    
+// V2.2
+    function _routeOut(uint amountIn, uint amountOutMin, address[] memory path, address payable to, uint deadline) internal ensure(deadline) returns (uint[] memory amounts) {           // virtual override 
+        address WETH_ = WETH;
+        amounts = IUniswapV2Router01(swapRouter).getAmountsOut(amountIn, path);
+        uint amount = amounts[amounts.length - 1];
+        require(amount >= amountOutMin, 'Router: INSUFFICIENT_OUTPUT_AMOUNT');
+        address pair0 = IUniswapV2Factory(swapFactory).getPair(path[0], path[1]);
+        IERC20(path[0]).safeTransfer(pair0, amounts[0]);
+        if(path[path.length-1] == WETH_) {
+            _route(amounts, path, address(this));
+            IWETH(WETH_).withdraw(amount);
+            to.transfer(amount);
+        } else
+            _route(amounts, path, to);
+    }
+
+    function _transfer(address payable sender, address undOrCur, int vol, int max, address[] memory path) internal {
+        address WETH_ = WETH;
+        uint deadline = now.add(config[_deadline_]);
+        uint fee = Math.abs(vol).mul(Factory(factory).feeRate()).div(1e18);
+        if(vol < 0) {
+            uint v = uint(-vol).sub(fee);
+            if(path.length == 0) {
+                require(-int(v) <= max, _slippage_too_high_);
+                if(undOrCur == WETH_) {
+                    IWETH(WETH_).withdraw(v);
+                    sender.transfer(v);
+                } else
+                    IERC20(undOrCur).safeTransfer(sender, v);
+            } else {
+                path = revertPath(path);
+                require(path[0] == undOrCur, 'INVALID_PATH');
+                _routeOut(v, uint(-max), path, sender, deadline);
+            }
+        } else if(vol > 0) {
+            uint v = uint(vol).add(fee);
+            if(path.length == 0) {
+                require(int(v) <= max, _slippage_too_high_);
+                if(msg.value > 0 && undOrCur == WETH_) {
+                    require(msg.value >= v, 'msg.value not enough');
+                    IWETH(WETH_).deposit{value: v}();
+                    if(msg.value > v)
+                        sender.transfer(msg.value - v);
+                } else 
+                    IERC20(undOrCur).safeTransferFrom(sender, address(this), v);
+            } else {
+                require(path[path.length - 1] == undOrCur, 'INVALID_PATH');
+                _routeIn(sender, v, uint(-max), path, address(this), deadline);
+            }
+            IERC20(undOrCur).approve(factory, v);
+        }
+    }
+
+    function _genData() internal view returns (bytes memory data) {
+        (address underlying, address currency, , , , , int undMax, int curMax, address[] memory undPath, address[] memory curPath) = abi.decode(_msgDataWithoutSelector(), (address, address, uint, uint, int, int, int, int, address[], address[]));
+        return abi.encode(underlying, currency, undMax, curMax, undPath, curPath);
+    }
+
+    function swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, address[] memory undPath, address[] memory curPath) external payable returns (address call, address put, int dUnd, int dCur) {
+        undMax;     curMax;     undPath;        curPath;
+        return _swap(underlying, currency, priceFloor, priceCap, dCall, dPut, int(uint(-1)/2), int(uint(-1)/2), _genData());
+    }
+
+    function _swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, bytes memory data) internal returns (address call, address put, int dUnd, int dCur) {
+        return Factory(factory).swap{value: msg.value}(underlying, currency, priceFloor, priceCap, dCall, dPut, undMax, curMax, data);
+    }
+    
+    function onFlashSwap(address call, address put, int dCall, int dPut, int dUnd, int dCur, bytes memory data) external payable {
+        require(_msgSender() == factory, 'only Factory');
+        address payable sender = abi.decode(data, (address));
+        {
+        (address underlying, address currency, int undMax, int curMax, address[] memory undPath, address[] memory curPath) = abi.decode(data, (address, address, int, int, address[], address[]));
+        _checkMistakeETH(sender, underlying, currency, dUnd, dCur, undPath, curPath);
+
+        _transfer(sender, underlying, dUnd, undMax, undPath);
+        _transfer(sender, currency,   dCur, curMax, curPath);
+        }
+        
+        if(dCall > 0)
+            IERC20(call).transfer(sender, uint(dCall));
+        else if(dCall < 0)
+            IERC20(call).transferFrom(sender, address(this), uint(-dCall));
+        if(dPut > 0)
+            IERC20(put).transfer(sender, uint(dPut));
+        if(dPut < 0)
+            IERC20(put).transferFrom(sender, address(this), uint(-dPut));
     }
 }
 
