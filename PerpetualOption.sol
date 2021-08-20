@@ -1,7 +1,3 @@
-/**
- *Submitted for verification at Etherscan.io on 2021-08-17
-*/
-
 // SPDX-License-Identifier: MIT
 
 pragma solidity ^0.6.0;
@@ -1797,8 +1793,7 @@ contract Constants {
     bytes32 internal constant _WETH_            = 'WETH';
     //bytes32 internal constant _swapFactory_     = 'swapFactory';
     bytes32 internal constant _swapRouter_      = 'swapRouter';
-    bytes32 internal constant _deadline_        = 'deadline';
-    //bytes32 internal constant _allowBurn_       = 'allowBurn';    // V2.1
+    bytes32 internal constant _isAuthority_     = 'isAuthority';
     
     uint256 internal constant MAX_FEE_RATE      = 0.10 ether;   // 10%
     
@@ -1858,6 +1853,10 @@ contract Call is ERC20UpgradeSafe {
         IERC20(underlying).safeTransfer(to, volume);
     }
 
+    function transfer_(address sender, address recipient, uint256 amount) external onlyFactory {
+        _transfer(sender, recipient, amount);
+    }
+    
     function mint_(address _to, uint volume) external onlyFactory {
         _mint(_to, volume);
     }
@@ -1930,6 +1929,10 @@ contract Put is ERC20UpgradeSafe {
         IERC20(currency).safeTransfer(to, volume);
     }
 
+    function transfer_(address sender, address recipient, uint256 amount) external onlyFactory {
+        _transfer(sender, recipient, amount);
+    }
+    
     function mint_(address _to, uint volume) external onlyFactory {
         _mint(_to, volume);
     }
@@ -2032,7 +2035,6 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         setFee(0.005 ether, feeTo);     // 0.5%
         //config[_swapRouter_]            = uint(swapRouter);
         //config[_WETH_]                  = uint(IUniswapV2Router01(swapRouter).WETH());
-        //config[_deadline_]              = 30 minutes;
     }
     
     function upgradeProductImplementationsTo(address implCall, address implPut) external governance {
@@ -2261,7 +2263,6 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
     function _transfer(address payable sender, address callOrPut, address undOrCur, int vol, int max, address[] memory path) internal {
         address WETH_ = address(config[_WETH_]);
         IUniswapV2Router01 router = IUniswapV2Router01(config[_swapRouter_]);
-        uint deadline = now.add(config[_deadline_]);
         uint fee = Math.abs(vol).mul(feeRate).div(1e18);
         if(vol > 0) {
             uint v = uint(vol).add(fee);
@@ -2279,14 +2280,14 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
                 require(path[path.length - 1] == undOrCur, 'INVALID_PATH');
                 if(msg.value > 0 && path[0] == WETH_) {
                     uint balance = address(this).balance;
-                    router.swapETHForExactTokens{value: msg.value}(v, path, callOrPut, deadline);
+                    router.swapETHForExactTokens{value: msg.value}(v, path, callOrPut);
                     if(address(this).balance > balance)
                         sender.transfer(address(this).balance - balance);
                 } else {
                     uint amount = router.getAmountsIn(v, path)[0];
                     IERC20(path[0]).safeTransferFrom(sender, address(this), amount);
                     IERC20(path[0]).approve(address(router), amount);
-                    router.swapTokensForExactTokens(v, uint(-max), path, callOrPut, deadline);
+                    router.swapTokensForExactTokens(v, uint(-max), path, callOrPut);
                 }
             }
         } else if(vol < 0) {
@@ -2303,9 +2304,9 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
                 require(path[0] == undOrCur, 'INVALID_PATH');
                 IERC20(undOrCur).approve(address(router), v);
                 if(path[path.length - 1] == WETH_)
-                    router.swapExactTokensForETH(   v, uint(-max), path, sender, deadline);
+                    router.swapExactTokensForETH(   v, uint(-max), path, sender);
                 else
-                    router.swapExactTokensForTokens(v, uint(-max), path, sender, deadline);
+                    router.swapExactTokensForTokens(v, uint(-max), path, sender);
             }
         }
         Call(callOrPut).withdraw_(address(config[_feeTo_]), fee);
@@ -2479,15 +2480,15 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         (dUnd, dCur, priceFloor, priceCap) = calcDelta(priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply(), dCall, dPut);
         require(dUnd.add_(Math.abs(dUnd).mul(feeRate).div(1e18)) <= undMax && dCur.add_(Math.abs(dCur).mul(feeRate).div(1e18)) <= curMax, _slippage_too_high_);
         
-        if(dCall > 0)
-            Call(call).mint_(sender, uint(dCall));
-        if(dPut > 0)
-            Put( put ).mint_(sender, uint(dPut ));
-
         if(dUnd < 0)
             Call(call).withdraw_(sender, uint(-dUnd).sub(uint(-dUnd).mul(feeRate).div(1e18)));
         if(dCur < 0)
             Put( put ).withdraw_(sender, uint(-dCur).sub(uint(-dCur).mul(feeRate).div(1e18)));
+
+        if(dCall > 0)
+            Call(call).mint_(sender, uint(dCall));
+        if(dPut > 0)
+            Put( put ).mint_(sender, uint(dPut ));
 
         if(data.length > 0)
             IFlashSwapCallee(_msgSender()).onFlashSwap{value: msg.value}(call, put, dCall, dPut, dUnd, dCur, data);
@@ -2588,11 +2589,16 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax, '');
     }
 /* V2.1    
-    function burnCallorPut_(address payable sender, address callOrPut, uint vol) external {
-        require(getConfigA(_allowBurn_, _msgSender()) != 0, 'Not allowBurn');
+    function burnAuth_(address callOrPut, address sender, uint vol) external {
+        require(getConfigA(_isAuthority_, _msgSender()) != 0, 'Not Authority');
         Call(callOrPut).burn_(sender, vol);
     }
 */
+    function transferAuth_(address callOrPut, address sender, address recipient, uint256 amount) external {
+        require(getConfigA(_isAuthority_, _msgSender()) != 0, 'Not Authority');
+        Call(callOrPut).transfer_(sender, recipient, amount);
+    }
+    
     function calc(uint priceFloor, uint priceCap, uint totalCall, uint totalPut) public pure returns (uint totalUnd, uint totalCur) {
         if(totalCall == 0 && totalPut == 0)
             return (0, 0);
@@ -2687,11 +2693,6 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
     address public swapRouter;
     address public WETH;
     
-    modifier ensure(uint deadline) {
-        require(deadline >= block.timestamp, 'Router: EXPIRED');
-        _;
-    }
-
     function __Router_init(address governor_, address factory_, address swapRouter_) public initializer {
         __Governable_init_unchained(governor_);
         __Context_init_unchained();
@@ -2704,21 +2705,20 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
         swapFactory = IUniswapV2Router01(swapRouter_).factory();
         swapRouter = swapRouter_;
         WETH = IUniswapV2Router01(swapRouter_).WETH();
-        config[_deadline_] = 30 minutes;
     }
     
-    function calcDeltaRoute(uint priceFloor, uint priceCap, uint totalCall, uint totalPut, int dCall, int dPut, uint slippage, address[] memory undPath, address[] memory curPath) public view returns (int undMax, int curMax, uint totalUnd, uint totalCur) {
+    function calcDeltaRoute(address[] memory undPath, address[] memory curPath, uint priceFloor, uint priceCap, uint totalCall, uint totalPut, int dCall, int dPut, uint slippage) public view returns (int undMax, int curMax, uint totalUnd, uint totalCur) {
         (undMax, curMax, totalUnd, totalCur) = Factory(factory).calcDeltaWithFeeAndSlippage(priceFloor, priceCap, totalCall, totalPut, dCall, dPut, slippage);
-        undMax = calcAmountRoute(undMax, undPath);
-        curMax = calcAmountRoute(curMax, curPath);
+        undMax = calcAmountRoute(undPath, undMax);
+        curMax = calcAmountRoute(curPath, curMax);
     }
     
-    function calcAmountRoute(int amount, address[] memory path) public view returns (int) {
-        if(path.length > 0)
-            if(amount > 0)
-                return int(IUniswapV2Router01(swapRouter).getAmountsIn(uint(amount), path)[0]);
-            else if(amount < 0)
-                return -int(IUniswapV2Router01(swapRouter).getAmountsOut(uint(-amount), revertPath(path))[path.length-1]);
+    function calcAmountRoute(address[] memory path, int amount) public view returns (int) {
+        if(path.length > 1)
+            if(amount < 0)
+                return -int(IUniswapV2Router01(swapRouter).getAmountsOut(uint(-amount), path)[path.length-1]);
+            else if(amount > 0)
+                return int(IUniswapV2Router01(swapRouter).getAmountsIn(uint(amount), revertPath(path))[0]);
         return amount;
     }
     
@@ -2728,13 +2728,13 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
             r[i] = path[path.length-i-1];
     }
     
-    function _checkMistakeETH(address payable sender, address underlying, address currency, int dUnd, int dCur, address[] memory undPath, address[] memory curPath) internal {
+    function _checkMistakeETH(address payable sender, address[] memory undPath, address[] memory curPath, int dUnd, int dCur) internal {
         address WETH_ = WETH;
         if(!(msg.value == 0
-            || (undPath.length > 0 && undPath[0] == WETH_ && dUnd > 0)
-            || (curPath.length > 0 && curPath[0] == WETH_ && dCur > 0)
-            || (undPath.length == 0 && underlying == WETH_ && dUnd > 0)
-            || (curPath.length == 0 && currency == WETH_ && dCur > 0))
+            || (undPath.length > 1 && undPath[undPath.length-1] == WETH_ && dUnd > 0)
+            || (curPath.length > 1 && curPath[curPath.length-1] == WETH_ && dCur > 0)
+            || (undPath.length <= 1 && undPath[0] == WETH_ && dUnd > 0)
+            || (curPath.length <= 1 && curPath[0] == WETH_ && dCur > 0))
         )
             sender.transfer(msg.value);
     }
@@ -2760,7 +2760,7 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
         }
     }
     
-    function _routeIn(address payable sender, uint amountOut, uint amountInMax, address[] memory path, address to, uint deadline) internal ensure(deadline) returns (uint[] memory amounts) {           // virtual override 
+    function _routeIn(address payable sender, uint amountOut, uint amountInMax, address[] memory path, address to) internal returns (uint[] memory amounts) {           // virtual override 
         address WETH_ = WETH;
         amounts = IUniswapV2Router01(swapRouter).getAmountsIn(amountOut, path);
         require(amounts[0] <= amountInMax, 'Router: EXCESSIVE_INPUT_AMOUNT');
@@ -2776,7 +2776,7 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
         _route(amounts, path, to);
     }
 /* V2.1               
-    function _routeOut(uint amountIn, uint amountOutMin, address[] memory path, address payable to, uint deadline) internal ensure(deadline) returns (uint[] memory amounts) {           // virtual override 
+    function _routeOut(uint amountIn, uint amountOutMin, address[] memory path, address payable to) internal returns (uint[] memory amounts) {           // virtual override 
         address WETH_ = WETH;
         amounts = IUniswapV2Router01(swapRouter).getAmountsOut(amountIn, path);
         uint amount = amounts[amounts.length - 1];
@@ -2791,7 +2791,6 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
 
     function _transfer(address payable sender, address callOrPut, address undOrCur, int vol, int max, address[] memory path) internal {
         address WETH_ = WETH;
-        uint deadline = now.add(config[_deadline_]);
         uint fee = Math.abs(vol).mul(Factory(factory).feeRate()).div(1e18);
         if(vol < 0) {
             uint v = uint(-vol).sub(fee);
@@ -2804,7 +2803,7 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
             } else {
                 path = revertPath(path);
                 require(path[0] == undOrCur, 'INVALID_PATH');
-                _routeOut(v, uint(-max), path, sender, deadline);
+                _routeOut(v, uint(-max), path, sender);
             }
         } else if(vol > 0) {
             uint v = uint(vol).add(fee);
@@ -2820,7 +2819,7 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
                     IERC20(undOrCur).safeTransferFrom(sender, callOrPut, v);
             } else {
                 require(path[path.length - 1] == undOrCur, 'INVALID_PATH');
-                _routeIn(sender, v, uint(-max), path, callOrPut, deadline);
+                _routeIn(sender, v, uint(-max), path, callOrPut);
             }
         }
     }
@@ -2852,13 +2851,13 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
         _transfer(sender, put,  currency,   dCur, curMax, curPath);
         }
         if(dCall < 0)
-            Factory(factory).burnCallorPut_(sender, call, uint(-dCall));
+            Factory(factory).burnAuth_(call, sender, uint(-dCall));
         if(dPut < 0)
-            Factory(factory).burnCallorPut_(sender, put , uint(-dPut ));
+            Factory(factory).burnAuth_(put , sender, uint(-dPut ));
     }
 */    
 // V2.2
-    function _routeOut(uint amountIn, uint amountOutMin, address[] memory path, address payable to, uint deadline) internal ensure(deadline) returns (uint[] memory amounts) {           // virtual override 
+    function _routeOut(uint amountIn, uint amountOutMin, address[] memory path, address payable to) internal returns (uint[] memory amounts) {           // virtual override 
         address WETH_ = WETH;
         amounts = IUniswapV2Router01(swapRouter).getAmountsOut(amountIn, path);
         uint amount = amounts[amounts.length - 1];
@@ -2873,27 +2872,24 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
             _route(amounts, path, to);
     }
 
-    function _transfer(address payable sender, address undOrCur, int vol, int max, address[] memory path) internal {
+    function _transfer(address payable sender, address[] memory path, int vol, int max) internal {
         address WETH_ = WETH;
-        uint deadline = now.add(config[_deadline_]);
+        address undOrCur = path[0];
         uint fee = Math.abs(vol).mul(Factory(factory).feeRate()).div(1e18);
         if(vol < 0) {
             uint v = uint(-vol).sub(fee);
-            if(path.length == 0) {
+            if(path.length <= 1) {
                 require(-int(v) <= max, _slippage_too_high_);
                 if(undOrCur == WETH_) {
                     IWETH(WETH_).withdraw(v);
                     sender.transfer(v);
                 } else
                     IERC20(undOrCur).safeTransfer(sender, v);
-            } else {
-                path = revertPath(path);
-                require(path[0] == undOrCur, 'INVALID_PATH');
-                _routeOut(v, uint(-max), path, sender, deadline);
-            }
+            } else
+                _routeOut(v, uint(-max), path, sender);
         } else if(vol > 0) {
             uint v = uint(vol).add(fee);
-            if(path.length == 0) {
+            if(path.length <= 1) {
                 require(int(v) <= max, _slippage_too_high_);
                 if(msg.value > 0 && undOrCur == WETH_) {
                     require(msg.value >= v, 'msg.value not enough');
@@ -2902,24 +2898,22 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
                         sender.transfer(msg.value - v);
                 } else 
                     IERC20(undOrCur).safeTransferFrom(sender, address(this), v);
-            } else {
-                require(path[path.length - 1] == undOrCur, 'INVALID_PATH');
-                _routeIn(sender, v, uint(-max), path, address(this), deadline);
-            }
+            } else
+                _routeIn(sender, v, uint(-max), revertPath(path), address(this));
             IERC20(undOrCur).approve(factory, v);
         }
     }
-
+/* V2.2
     function _genData() internal view returns (bytes memory data) {
         (address underlying, address currency, , , , , int undMax, int curMax, address[] memory undPath, address[] memory curPath) = abi.decode(_msgDataWithoutSelector(), (address, address, uint, uint, int, int, int, int, address[], address[]));
-        return abi.encode(underlying, currency, undMax, curMax, undPath, curPath);
+        return abi.encode(_msgSender(), underlying, currency, undMax, curMax, undPath, curPath);
     }
-
+    
     function swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, address[] memory undPath, address[] memory curPath) external payable returns (address call, address put, int dUnd, int dCur) {
         undMax;     curMax;     undPath;        curPath;
         return _swap(underlying, currency, priceFloor, priceCap, dCall, dPut, int(uint(-1)/2), int(uint(-1)/2), _genData());
     }
-
+    
     function _swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, bytes memory data) internal returns (address call, address put, int dUnd, int dCur) {
         return Factory(factory).swap{value: msg.value}(underlying, currency, priceFloor, priceCap, dCall, dPut, undMax, curMax, data);
     }
@@ -2928,7 +2922,7 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
         require(_msgSender() == factory, 'only Factory');
         address payable sender = abi.decode(data, (address));
         {
-        (address underlying, address currency, int undMax, int curMax, address[] memory undPath, address[] memory curPath) = abi.decode(data, (address, address, int, int, address[], address[]));
+        ( , address underlying, address currency, int undMax, int curMax, address[] memory undPath, address[] memory curPath) = abi.decode(data, (address, address, address, int, int, address[], address[]));
         _checkMistakeETH(sender, underlying, currency, dUnd, dCur, undPath, curPath);
 
         _transfer(sender, underlying, dUnd, undMax, undPath);
@@ -2938,11 +2932,48 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
         if(dCall > 0)
             IERC20(call).transfer(sender, uint(dCall));
         else if(dCall < 0)
-            IERC20(call).transferFrom(sender, address(this), uint(-dCall));
+            Factory(factory).transferAuth_(call, sender, address(this), uint(-dCall));
         if(dPut > 0)
             IERC20(put).transfer(sender, uint(dPut));
         if(dPut < 0)
-            IERC20(put).transferFrom(sender, address(this), uint(-dPut));
+            Factory(factory).transferAuth_(call, sender, address(this), uint(-dPut));
+    }
+*/
+// V2.3
+    function _genData() internal view returns (bytes memory data) {
+        (address[] memory undPath, address[] memory curPath, , , , , int undMax, int curMax) = abi.decode(_msgDataWithoutSelector(), (address[], address[], uint, uint, int, int, int, int));
+        return abi.encode(_msgSender(), undPath, curPath, undMax, curMax);
+    }
+
+    function swap(address[] memory undPath, address[] memory curPath, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax) external payable returns (address call, address put, int dUnd, int dCur) {
+        undMax;     curMax;
+        return Factory(factory).swap{value: msg.value}(undPath[0], curPath[0], priceFloor, priceCap, dCall, dPut, int(uint(-1)/2), int(uint(-1)/2), _genData());
+    }
+
+    function onFlashSwap(address call, address put, int dCall, int dPut, int dUnd, int dCur, bytes memory data) external payable {
+        require(_msgSender() == factory, 'only Factory');
+        (address payable sender, address[] memory undPath, address[] memory curPath, int undMax, int curMax) = abi.decode(data, (address, address[], address[], int, int));
+        _checkMistakeETH(sender, undPath, curPath, dUnd, dCur);
+
+        if(dUnd < 0)
+            _transfer(sender, undPath, dUnd, undMax);
+        if(dCur < 0)
+            _transfer(sender, curPath, dCur, curMax);
+
+        if(dCall > 0)
+            IERC20(call).transfer(sender, uint(dCall));
+        if(dPut > 0)
+            IERC20(put).transfer(sender, uint(dPut));
+
+        if(dCall < 0)
+            Factory(factory).transferAuth_(call, sender, address(this), uint(-dCall));
+        if(dPut < 0)
+            Factory(factory).transferAuth_(call, sender, address(this), uint(-dPut));
+
+        if(dUnd > 0)
+            _transfer(sender, undPath, dUnd, undMax);
+        if(dCur > 0)
+            _transfer(sender, curPath, dCur, curMax);
     }
 }
 
