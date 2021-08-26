@@ -1869,7 +1869,7 @@ contract Call is ERC20UpgradeSafe {
     function burn_(address _from, uint volume) external onlyFactory {
         _burn(_from, volume);
     }
-    
+/*    
     function mint(int volume, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
         return Factory(factory).mintCall_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, volume, undMax, curMax);
     }
@@ -1878,9 +1878,9 @@ contract Call is ERC20UpgradeSafe {
         return Factory(factory).burnCall_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, volume, undMax, curMax);
     }
     function burnAll(int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        return Factory(factory).burnCall_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, int(balanceOf(_msgSender())), undMax, curMax);
+        return Factory(factory).burnCall_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, -int(balanceOf(_msgSender())), undMax, curMax);
     }
-    
+*/    
     function attributes() public view returns (address _underlying, address _currency, uint _priceFloor, uint _priceCap) {
         return (underlying, currency, priceFloor, priceCap);
     }
@@ -1945,7 +1945,7 @@ contract Put is ERC20UpgradeSafe {
     function burn_(address _from, uint volume) external onlyFactory {
         _burn(_from, volume);
     }
-    
+/*    
     function mint(int volume, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
         return Factory(factory).mintPut_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, volume, undMax, curMax);
     }
@@ -1954,9 +1954,9 @@ contract Put is ERC20UpgradeSafe {
         return Factory(factory).burnPut_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, volume, undMax, curMax);
     }
     function burnAll(int undMax, int curMax) external payable returns (int dUnd, int dCur) {
-        return Factory(factory).burnPut_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, int(balanceOf(_msgSender())), undMax, curMax);
+        return Factory(factory).burnPut_{value: msg.value}(_msgSender(), underlying, currency, priceFloor, priceCap, -int(balanceOf(_msgSender())), undMax, curMax);
     }
-    
+*/    
     function attributes() public view returns (address _underlying, address _currency, uint _priceFloor, uint _priceCap) {
         return (underlying, currency, priceFloor, priceCap);
     }
@@ -2467,7 +2467,7 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         IERC20(undOrCur).safeTransferFrom(sender, callOrPut, uint(vol).add(uint(vol).mul(feeRate).div(1e18)));
     }
 */  
-// V2.2
+/* V2.2
     function swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, bytes memory data) external payable returns (address call, address put, int dUnd, int dCur) {
         return _swap(_msgSender(), underlying, currency, priceFloor, priceCap, dCall, dPut, undMax, curMax, data);
     }
@@ -2522,6 +2522,52 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         emit Swap(sender, underlying, currency, Call(call).priceFloor(), Call(call).priceCap(), dCall, dPut, dUnd, dCur, data);
     }
     event Swap(address indexed sender, address indexed underlying, address indexed currency, uint priceFloor, uint priceCap, int dCall, int dPut, int dUnd, int dCur, bytes data);
+*/
+// V2.4
+    function swap(address underlying, address currency, uint priceFloor, uint priceCap, int dCall, int dPut, int undMax, int curMax, bytes memory data) external nonReentrant returns (address call, address put, int dUnd, int dCur) {
+        call = calls[underlying][currency][priceFloor][priceCap];
+        put  = puts [underlying][currency][priceFloor][priceCap];
+        if(put == address(0))                                                                      // single check is sufficient
+            (call, put) = createOption(underlying, currency, priceFloor, priceCap);
+        
+        // share priceFloor and priceCap instead of totalUnd and totalCur to avoid stack too deep errors 
+        // share undMax and curMax instead of undFee and curFee to avoid stack too deep errors 
+
+        (dUnd, dCur, priceFloor, priceCap) = calcDelta(priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply(), dCall, dPut);
+        require(dUnd.add_(undMax = int(Math.abs(dUnd).mul(feeRate).div(1e18))) <= undMax && dCur.add_(curMax = int(Math.abs(dCur).mul(feeRate).div(1e18))) <= curMax, _slippage_too_high_);
+        
+        if(dUnd < 0)
+            Call(call).withdraw_(_msgSender(), uint(-dUnd).sub(undMax));
+        if(dCur < 0)
+            Put( put ).withdraw_(_msgSender(), uint(-dCur).sub(curMax));
+
+        if(dCall > 0)
+            Call(call).mint_(_msgSender(), uint(dCall));
+        if(dPut > 0)
+            Put( put ).mint_(_msgSender(), uint(dPut ));
+
+        if(data.length > 0)
+            IFlashSwapCallee(_msgSender()).onFlashSwap(call, put, dCall, dPut, dUnd, dCur, data);
+
+        if(dCall < 0)
+            Call(call).burn_(_msgSender(), uint(-dCall));
+        if(dPut < 0)
+            Put( put ).burn_(_msgSender(), uint(-dPut ));
+
+        if(dUnd > 0) {
+            address under = underlying;
+            IERC20(under).safeTransferFrom(_msgSender(), call, uint(dUnd).add(undMax));
+        }
+        if(dCur > 0)
+            IERC20(currency).safeTransferFrom(_msgSender(), put, uint(dCur).add(curMax));
+        
+        Call(call).withdraw_(address(config[_feeTo_]), uint(undMax));
+        Put( put ).withdraw_(address(config[_feeTo_]), uint(curMax));
+
+        require(IERC20(underlying).balanceOf(call) >= priceFloor && IERC20(currency).balanceOf(put) >= priceCap, 'reserve less than expected');
+        emit Swap(_msgSender(), underlying, currency, Call(call).priceFloor(), Call(call).priceCap(), dCall, dPut, dUnd, dCur, data);
+    }
+    event Swap(address indexed sender, address indexed underlying, address indexed currency, uint priceFloor, uint priceCap, int dCall, int dPut, int dUnd, int dCur, bytes data);
 /*    
     function swap2_(address undFrom, address curFrom, address underlying, address currency, uint priceFloor, uint priceCap, int volCall, int volPut, int undMax, int curMax) external governance returns (address call, address put, int dUnd, int dCur) {
         uint oldFeeRate = feeRate;
@@ -2544,24 +2590,24 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
     function mintCall(address call, int volCall, int undMax, int curMax) public payable returns (int dUnd, int dCur) {
         (address underlying, address currency, uint priceFloor, uint priceCap) = Call(call).attributes();
         (, , dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, volCall, 0, undMax, curMax);
-    }*/
+    }
     function mintCall_(address payable sender, address underlying, address currency, uint priceFloor, uint priceCap, int volCall, int undMax, int curMax) public payable returns (int dUnd, int dCur) {
         require(_msgSender() == calls[underlying][currency][priceFloor][priceCap], 'Only Call');
         (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, volCall, 0, undMax, curMax, '');
     }
-/*
+
     function mintPut4(address underlying, address currency, uint priceFloor, uint priceCap, int volPut, int undMax, int curMax) public payable returns (address put, int dUnd, int dCur) {
         (, put, dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax);
     }
     function mintPut(address put, int volPut, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
         (address underlying, address currency, uint priceFloor, uint priceCap) = Put(put).attributes();
         (, , dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax);
-    }*/
+    }
     function mintPut_(address payable sender, address underlying, address currency, uint priceFloor, uint priceCap, int volPut, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
         require(_msgSender() == puts[underlying][currency][priceFloor][priceCap], 'Only Put');
         (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax, '');
     }
-/*
+
     function burn4(address underlying, address currency, uint priceFloor, uint priceCap, int volCall, int volPut, int undMax, int curMax) public payable returns (address call, address put, int dUnd, int dCur) {
         return swap(underlying, currency, priceFloor, priceCap, volCall, volPut, undMax, curMax);
     }
@@ -2575,24 +2621,25 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
     }
     function burnCall(address call, int volCall, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
         (address underlying, address currency, uint priceFloor, uint priceCap) = Call(call).attributes();
-        (, , dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, volCall, undMax, curMax, curMax);
-    }*/
+        (, , dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, volCall, 0, undMax, curMax);
+    }
     function burnCall_(address payable sender, address underlying, address currency, uint priceFloor, uint priceCap, int volCall, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
         require(_msgSender() == calls[underlying][currency][priceFloor][priceCap], 'Only Call');
-        (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, volCall, undMax, curMax, curMax, '');
+        (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, volCall, 0, undMax, curMax, '');
     }
-/*
+
     function burnPut4(address underlying, address currency, uint priceFloor, uint priceCap, int volPut, int undMax, int curMax) public payable returns (address put, int dUnd, int dCur) {
         (, put, dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax);
     }
     function burnPut(address put, int volPut, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
         (address underlying, address currency, uint priceFloor, uint priceCap) = Put(put).attributes();
         (, , dUnd, dCur) = swap(underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax);
-    }*/
+    }
     function burnPut_(address payable sender, address underlying, address currency, uint priceFloor, uint priceCap, int volPut, int undMax, int curMax) external payable returns (int dUnd, int dCur) {
         require(_msgSender() == puts[underlying][currency][priceFloor][priceCap], 'Only Put');
         (, , dUnd, dCur) = _swap(sender, underlying, currency, priceFloor, priceCap, 0, volPut, undMax, curMax, '');
     }
+*/
 /* V2.1    
     function burnAuth_(address callOrPut, address sender, uint vol) external {
         require(getConfigA(_isAuthority_, _msgSender()) != 0, 'Not Authority');
@@ -2629,8 +2676,8 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
 
     function calcDeltaWithFeeAndSlippage(uint priceFloor, uint priceCap, uint totalCall, uint totalPut, int dCall, int dPut, uint slippage) public view returns (int undMax, int curMax, uint totalUnd, uint totalCur) {
         (undMax, curMax, totalUnd, totalCur) = calcDelta(priceFloor, priceCap, totalCall, totalPut, dCall, dPut);
-        undMax = SafeMath.add_(undMax, Math.abs(undMax).mul(feeRate.add(slippage)).div(1e18));
-        curMax = SafeMath.add_(curMax, Math.abs(curMax).mul(feeRate.add(slippage)).div(1e18));
+        undMax = undMax.add_(Math.abs(undMax).mul(feeRate.add(slippage)).div(1e18));
+        curMax = curMax.add_(Math.abs(curMax).mul(feeRate.add(slippage)).div(1e18));
     }
 
     function calcPrice(uint price, uint priceFloor, uint priceCap, uint totalCall, uint totalPut) public pure returns (uint priceCall, uint pricePut, uint totalUnd, uint totalCur, uint totalValue) {
@@ -2684,7 +2731,7 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
 
 
 interface IFlashSwapCallee {
-    function onFlashSwap(address call, address put, int dCall, int dPut, int dUnd, int dCur, bytes memory data) external payable;
+    function onFlashSwap(address call, address put, int dCall, int dPut, int dUnd, int dCur, bytes memory data) external;
 }
 
 
@@ -2735,11 +2782,11 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
             if(amount < 0)
                 return -int(IUniswapV2Router01(swapRouter).getAmountsOut(uint(-amount), path)[path.length-1]);
             else if(amount > 0)
-                return int(IUniswapV2Router01(swapRouter).getAmountsIn(uint(amount), revertPath(path))[0]);
+                return int(IUniswapV2Router01(swapRouter).getAmountsIn(uint(amount), _revertPath(path))[0]);
         return amount;
     }
     
-    function revertPath(address[] memory path) public pure returns (address[] memory r) {
+    function _revertPath(address[] memory path) internal pure returns (address[] memory r) {
         r = new address[](path.length);
         for(uint i=0; i<path.length; i++)
             r[i] = path[path.length-i-1];
@@ -2804,7 +2851,7 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
             } else {
                 path = revertPath(path);
                 require(path[0] == undOrCur, 'INVALID_PATH');
-                _routeOut(v, uint(-max), path, sender);
+                _routeOut(v, (max < 0 ? uint(-max) : 0), path, sender);
             }
         } else if(vol > 0) {
             uint v = uint(vol).add(fee);
@@ -2820,7 +2867,7 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
                     IERC20(undOrCur).safeTransferFrom(sender, callOrPut, v);
             } else {
                 require(path[path.length - 1] == undOrCur, 'INVALID_PATH');
-                _routeIn(sender, v, uint(-max), path, callOrPut);
+                _routeIn(sender, v, (max > 0 ? uint(max) : 0), path, callOrPut);
             }
         }
     }
@@ -2903,7 +2950,7 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
                 } else
                     IERC20(undOrCur).safeTransfer(sender, v);
             } else
-                _routeOut(v, uint(-max), path, sender);
+                _routeOut(v, (max < 0 ? uint(-max) : 0), path, sender);
         } else if(vol > 0) {
             uint v = uint(vol).add(fee);
             if(path.length <= 1) {
@@ -2916,7 +2963,7 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
                 } else 
                     IERC20(undOrCur).safeTransferFrom(sender, address(this), v);
             } else
-                _routeIn(sender, v, uint(-max), revertPath(path), address(this));
+                _routeIn(sender, v, (max > 0 ? uint(max) : 0), revertPath(path), address(this));
             IERC20(undOrCur).approve(factory, v);
         }
     }
@@ -3008,7 +3055,7 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
         undMax;     curMax;
     }
 
-    function onFlashSwap(address call, address put, int dCall, int dPut, int dUnd, int dCur, bytes memory data) external payable {
+    function onFlashSwap(address call, address put, int dCall, int dPut, int dUnd, int dCur, bytes memory data) external {
         require(_msgSender() == factory, 'only Factory');
         (address payable sender, address[] memory undPath, address[] memory curPath, int undMax, int curMax) = abi.decode(data, (address, address[], address[], int, int));
         //_checkMistakeETH(sender, undPath, curPath, dUnd, dCur);
@@ -3050,20 +3097,19 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
                 if(path[path.length-1] != WETH_ && sender != address(this))
                     IERC20(undOrCur).safeTransfer(sender, v);
             } else
-                _routeOut(v, uint(-max), path, path[path.length-1] == WETH_ ? address(this) : sender);
+                _routeOut(v, (max < 0 ? uint(-max) : 0), path, path[path.length-1] == WETH_ ? address(this) : sender);
         } else if(vol > 0) {
             if(path.length <= 1) {
                 require(vol <= max, _slippage_too_high_);
                 IERC20(undOrCur).safeTransferFrom(sender, address(this), v);
             } else
-                _routeIn(sender, v, uint(-max), revertPath(path), address(this));
+                _routeIn(sender, v, (max > 0 ? uint(max) : 0), _revertPath(path), address(this));
         }
     }
 
     function _routeOut(uint amountIn, uint amountOutMin, address[] memory path, address to) internal returns (uint[] memory amounts) {           // virtual override 
         amounts = IUniswapV2Router01(swapRouter).getAmountsOut(amountIn, path);
-        uint amount = amounts[amounts.length - 1];
-        require(amount >= amountOutMin, 'Router: INSUFFICIENT_OUTPUT_AMOUNT');
+        require(amounts[amounts.length-1] >= amountOutMin, 'Router: INSUFFICIENT_OUTPUT_AMOUNT');
         address pair0 = IUniswapV2Factory(swapFactory).getPair(path[0], path[1]);
         IERC20(path[0]).safeTransfer(pair0, amounts[0]);
         _route(amounts, path, to);
@@ -3077,11 +3123,28 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
         _route(amounts, path, to);
     }
     
-    function rescueTokens(address _token, address _dst, uint volume) external governance {
-        if(volume == uint(-1))
-            volume = IERC20(_token).balanceOf(address(this));
-        IERC20(_token).safeTransfer(_dst, volume);
+    function calcPrice4(address underlying, address currency, uint priceFloor, uint priceCap) public view returns (uint price, uint priceCall, uint pricePut, uint totalUnd, uint totalCur, uint totalValue) {
+        address call = Factory(factory).calls(underlying, currency, priceFloor, priceCap);
+        address put  = Factory(factory).puts (underlying, currency, priceFloor, priceCap);
+        address pair = IUniswapV2Factory(swapFactory).getPair(underlying, currency);
+        if(put == address(0) || pair == address(0))                                     // single check is sufficient
+            return (0, 0, 0, 0, 0, 0);
+        (uint und, uint cur, ) = IUniswapV2Pair(pair).getReserves();
+        (und, cur) = underlying < currency ? (und, cur) : (cur, und);
+        price = cur.mul(1e18).div(und);
+        (priceCall, pricePut, totalUnd, totalCur, totalValue) = Factory(factory).calcPrice(price, priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply());
     }
+
+    function calcPrice1(address callOrPut) public view returns (uint price, uint priceCall, uint pricePut, uint totalUnd, uint totalCur, uint totalValue) {
+        (address underlying, address currency, uint priceFloor, uint priceCap) = Call(callOrPut).attributes();
+        return calcPrice4(underlying, currency, priceFloor, priceCap);
+    }
+        
+    //function rescueTokens(address _token, address _dst, uint volume) external governance {
+    //    if(volume == uint(-1))
+    //        volume = IERC20(_token).balanceOf(address(this));
+    //    IERC20(_token).safeTransfer(_dst, volume);
+    //}
 }
 
 
