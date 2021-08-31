@@ -3086,10 +3086,6 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
         address undOrCur = path[0];
         uint fee = Math.abs(vol).mul(Factory(factory).feeRate()).div(1e18);
         vol = vol.add_(fee);
-        if(vol > 0) {
-            IERC20(undOrCur).approve(factory, uint(vol));
-            vol = vol.sub_(int(IERC20(path[path.length-1]).balanceOf(address(this))));
-        }
         uint v = Math.abs(vol);
         if(vol < 0) {
             if(path.length <= 1) {
@@ -3097,29 +3093,40 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
                 if(path[path.length-1] != WETH_ && sender != address(this))
                     IERC20(undOrCur).safeTransfer(sender, v);
             } else
-                _routeOut(v, (max < 0 ? uint(-max) : 0), path, path[path.length-1] == WETH_ ? address(this) : sender);
+                _routeOut(v, max, path, path[path.length-1] == WETH_ ? address(this) : sender);
         } else if(vol > 0) {
             if(path.length <= 1) {
-                require(vol <= max, _slippage_too_high_);
-                IERC20(undOrCur).safeTransferFrom(sender, address(this), v);
+                uint b = IERC20(undOrCur).balanceOf(address(this));
+                require(v.sub_(b) <= max, _slippage_too_high_);
+                if(b < v)
+                    IERC20(undOrCur).safeTransferFrom(sender, address(this), v.sub(b));
+                else if(b > v && undOrCur != WETH_)
+                    IERC20(undOrCur).safeTransfer(sender, b.sub(v));
             } else
-                _routeIn(sender, v, (max > 0 ? uint(max) : 0), _revertPath(path), address(this));
+                _routeIn(sender, v, max, _revertPath(path), address(this));
+            IERC20(undOrCur).approve(factory, v);
         }
     }
 
-    function _routeOut(uint amountIn, uint amountOutMin, address[] memory path, address to) internal returns (uint[] memory amounts) {           // virtual override 
+    function _routeOut(uint amountIn, int amountOutMin, address[] memory path, address to) internal returns (uint[] memory amounts) {           // virtual override 
         amounts = IUniswapV2Router01(swapRouter).getAmountsOut(amountIn, path);
-        require(amounts[amounts.length-1] >= amountOutMin, 'Router: INSUFFICIENT_OUTPUT_AMOUNT');
+        require(int(amounts[amounts.length-1]) >= amountOutMin, 'Router: INSUFFICIENT_OUTPUT_AMOUNT');
         address pair0 = IUniswapV2Factory(swapFactory).getPair(path[0], path[1]);
         IERC20(path[0]).safeTransfer(pair0, amounts[0]);
         _route(amounts, path, to);
     }
 
-    function _routeIn(address sender, uint amountOut, uint amountInMax, address[] memory path, address to) internal returns (uint[] memory amounts) {           // virtual override 
+    function _routeIn(address sender, uint amountOut, int amountInMax, address[] memory path, address to) internal returns (uint[] memory amounts) {           // virtual override 
+        uint b = IERC20(path[0]).balanceOf(address(this));
         amounts = IUniswapV2Router01(swapRouter).getAmountsIn(amountOut, path);
-        require(amounts[0] <= amountInMax, 'Router: EXCESSIVE_INPUT_AMOUNT');
+        require(amounts[0].sub_(b) <= amountInMax, 'Router: EXCESSIVE_INPUT_AMOUNT');
         address pair0 = IUniswapV2Factory(swapFactory).getPair(path[0], path[1]);
-        IERC20(path[0]).safeTransferFrom(sender, pair0, amounts[0]);
+        if(b > 0)
+            IERC20(path[0]).safeTransfer(pair0, Math.min(amounts[0], b));
+        if(b < amounts[0])
+            IERC20(path[0]).safeTransferFrom(sender, pair0, amounts[0].sub(b));
+        else if(b > amounts[0] && path[0] != WETH)
+            IERC20(path[0]).safeTransfer(sender, b.sub(amounts[0]));
         _route(amounts, path, to);
     }
     
