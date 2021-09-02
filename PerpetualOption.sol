@@ -1653,6 +1653,10 @@ library SafeERC20 {
         _callOptionalReturn(token, abi.encodeWithSelector(token.approve.selector, spender, value));
     }
 
+    function safeApprove_(IERC20 token, address spender, uint256 value) internal {
+        _callOptionalReturn(token, abi.encodeWithSelector(token.approve.selector, spender, value));
+    }
+
     function safeIncreaseAllowance(IERC20 token, address spender, uint256 value) internal {
         uint256 newAllowance = token.allowance(address(this), spender).add(value);
         _callOptionalReturn(token, abi.encodeWithSelector(token.approve.selector, spender, newAllowance));
@@ -2534,12 +2538,12 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         // share undMax and curMax instead of undFee and curFee to avoid stack too deep errors 
 
         (dUnd, dCur, priceFloor, priceCap) = calcDelta(priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply(), dCall, dPut);
-        require(dUnd.add_(undMax = int(Math.abs(dUnd).mul(feeRate).div(1e18))) <= undMax && dCur.add_(curMax = int(Math.abs(dCur).mul(feeRate).div(1e18))) <= curMax, _slippage_too_high_);
+        require((dUnd = dUnd.add_(undMax = int(Math.abs(dUnd).mul(feeRate).div(1e18)))) <= undMax && (dCur = dCur.add_(curMax = int(Math.abs(dCur).mul(feeRate).div(1e18)))) <= curMax, _slippage_too_high_);
         
         if(dUnd < 0)
-            Call(call).withdraw_(_msgSender(), uint(-dUnd).sub(undMax));
+            Call(call).withdraw_(_msgSender(), uint(-dUnd));
         if(dCur < 0)
-            Put( put ).withdraw_(_msgSender(), uint(-dCur).sub(curMax));
+            Put( put ).withdraw_(_msgSender(), uint(-dCur));
 
         if(dCall > 0)
             Call(call).mint_(_msgSender(), uint(dCall));
@@ -2555,11 +2559,11 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
             Put( put ).burn_(_msgSender(), uint(-dPut ));
 
         if(dUnd > 0) {
-            address under = underlying;
-            IERC20(under).safeTransferFrom(_msgSender(), call, uint(dUnd).add(undMax));
+            address under = underlying;     // to avoid stack too deep errors 
+            IERC20(under).safeTransferFrom(_msgSender(), call, uint(dUnd));
         }
         if(dCur > 0)
-            IERC20(currency).safeTransferFrom(_msgSender(), put, uint(dCur).add(curMax));
+            IERC20(currency).safeTransferFrom(_msgSender(), put, uint(dCur));
         
         Call(call).withdraw_(address(config[_feeTo_]), uint(undMax));
         Put( put ).withdraw_(address(config[_feeTo_]), uint(curMax));
@@ -2766,15 +2770,27 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
     }
 */    
 // V2.4
-    function calcDeltaRoute(address[] memory undPath, address[] memory curPath, uint priceFloor, uint priceCap, uint totalCall, uint totalPut, int dCall, int dPut, uint slippage) public view returns (int undMax, int curMax, uint totalUnd, uint totalCur) {
-        (undMax, curMax, totalUnd, totalCur) = Factory(factory).calcDeltaWithFeeAndSlippage(priceFloor, priceCap, totalCall, totalPut, dCall, dPut, slippage);
+    //function calcDeltaRoute(address[] memory undPath, address[] memory curPath, uint priceFloor, uint priceCap, uint totalCall, uint totalPut, int dCall, int dPut, uint slippage) public view returns (int undMax, int curMax, uint totalUnd, uint totalCur) {
+    //    (undMax, curMax, totalUnd, totalCur) = Factory(factory).calcDeltaWithFeeAndSlippage(priceFloor, priceCap, totalCall, totalPut, dCall, dPut, slippage);
+    //    undMax = calcAmountRoute(undPath, undMax);
+    //    curMax = calcAmountRoute(curPath, curMax);
+    //    if(undPath[undPath.length-1] == curPath[curPath.length-1])
+    //        if(undMax > 0 && curMax < 0)
+    //            undMax = undMax.add_(curMax);
+    //        else if(curMax > 0 && undMax < 0)
+    //            curMax = curMax.add_(undMax);
+    //}
+    
+    function calcDeltaRoute(address[] memory undPath, address[] memory curPath, uint priceFloor, uint priceCap, int dCall, int dPut, uint slippage) public view returns (int undMax, int curMax, uint totalUnd, uint totalCur) {
+        address call = Factory(factory).calls(undPath[0], curPath[0], priceFloor, priceCap);
+        address put  = Factory(factory).puts (undPath[0], curPath[0], priceFloor, priceCap);
+        if(call != address(0)) {
+            totalUnd = IERC20(call).totalSupply();       // share totalUnd instead of totalCall to avoid stack too deep errors
+            totalCur = IERC20(put ).totalSupply();       // share totalCur instead of totalPut  to avoid stack too deep errors
+        }
+        (undMax, curMax, totalUnd, totalCur) = Factory(factory).calcDeltaWithFeeAndSlippage(priceFloor, priceCap, totalUnd, totalCur, dCall, dPut, slippage);
         undMax = calcAmountRoute(undPath, undMax);
         curMax = calcAmountRoute(curPath, curMax);
-        if(undPath[undPath.length-1] == curPath[curPath.length-1])
-            if(undMax > 0 && curMax < 0)
-                undMax = undMax.add_(curMax);
-            else if(curMax > 0 && undMax < 0)
-                curMax = curMax.add_(undMax);
     }
     
     function calcAmountRoute(address[] memory path, int amount) public view returns (int) {
@@ -3084,8 +3100,8 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
     function _transfer(address sender, address[] memory path, int vol, int max) internal {
         address WETH_ = WETH;
         address undOrCur = path[0];
-        uint fee = Math.abs(vol).mul(Factory(factory).feeRate()).div(1e18);
-        vol = vol.add_(fee);
+        //uint fee = Math.abs(vol).mul(Factory(factory).feeRate()).div(1e18);
+        //vol = vol.add_(fee);
         uint v = Math.abs(vol);
         if(vol < 0) {
             if(path.length <= 1) {
@@ -3097,14 +3113,14 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
         } else if(vol > 0) {
             if(path.length <= 1) {
                 uint b = IERC20(undOrCur).balanceOf(address(this));
-                require(v.sub_(b) <= max, _slippage_too_high_);
+                require(vol <= max, _slippage_too_high_);
                 if(b < v)
                     IERC20(undOrCur).safeTransferFrom(sender, address(this), v.sub(b));
                 else if(b > v && undOrCur != WETH_)
                     IERC20(undOrCur).safeTransfer(sender, b.sub(v));
             } else
                 _routeIn(sender, v, max, _revertPath(path), address(this));
-            IERC20(undOrCur).approve(factory, v);
+            IERC20(undOrCur).safeApprove_(factory, v);
         }
     }
 
@@ -3119,7 +3135,7 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
     function _routeIn(address sender, uint amountOut, int amountInMax, address[] memory path, address to) internal returns (uint[] memory amounts) {           // virtual override 
         uint b = IERC20(path[0]).balanceOf(address(this));
         amounts = IUniswapV2Router01(swapRouter).getAmountsIn(amountOut, path);
-        require(amounts[0].sub_(b) <= amountInMax, 'Router: EXCESSIVE_INPUT_AMOUNT');
+        require(int(amounts[0]) <= amountInMax, 'Router: EXCESSIVE_INPUT_AMOUNT');
         address pair0 = IUniswapV2Factory(swapFactory).getPair(path[0], path[1]);
         if(b > 0)
             IERC20(path[0]).safeTransfer(pair0, Math.min(amounts[0], b));
