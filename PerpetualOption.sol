@@ -1653,7 +1653,9 @@ library SafeERC20 {
         _callOptionalReturn(token, abi.encodeWithSelector(token.approve.selector, spender, value));
     }
 
-    function safeApprove_(IERC20 token, address spender, uint256 value) internal {
+    function safeApprove2(IERC20 token, address spender, uint256 value) internal {
+        if((value != 0) && (token.allowance(address(this), spender) != 0))
+            _callOptionalReturn(token, abi.encodeWithSelector(token.approve.selector, spender, 0));
         _callOptionalReturn(token, abi.encodeWithSelector(token.approve.selector, spender, value));
     }
 
@@ -3120,7 +3122,7 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
                     IERC20(undOrCur).safeTransfer(sender, b.sub(v));
             } else
                 _routeIn(sender, v, max, _revertPath(path), address(this));
-            IERC20(undOrCur).safeApprove_(factory, v);
+            IERC20(undOrCur).safeApprove2(factory, v);
         }
     }
 
