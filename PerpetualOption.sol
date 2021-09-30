@@ -1006,6 +1006,21 @@ library SafeMath {
 
         return c;
     }
+    
+    function mul_(int256 a, int256 b) internal pure returns (int256 c) {
+        c = a * b;
+        require(a == 0 || c / a == b, "SafeMath: mul_ overflow");
+    }
+
+    function mul_(uint256 a, int256 b) internal pure returns (int256) {
+        require(int256(a) >= 0, "SafeMath: mul_ int256(a) overflow");
+        return mul_(int256(a), b);
+    }
+
+    function mul_(int256 a, uint256 b) internal pure returns (int256 c) {
+        require(int256(b) >= 0, "SafeMath: mul_ int256(b) overflow");
+        return mul_(a, int256(b));
+    }
 
     /**
      * @dev Returns the integer division of two unsigned integers. Reverts on
@@ -1040,6 +1055,21 @@ library SafeMath {
         // assert(a == b * c + a % b); // There is no case in which this doesn't hold
 
         return c;
+    }
+
+    function div_(int256 a, int256 b) internal pure returns (int256) {
+        require(b != 0, "SafeMath: div_ by zero");
+        return a / b;
+    }
+
+    function div_(uint256 a, int256 b) internal pure returns (int256) {
+        require(int256(a) >= 0, "SafeMath: div_ int256(a) overflow");
+        return div_(int256(a), b);
+    }
+
+    function div_(int256 a, uint256 b) internal pure returns (int256) {
+        require(int256(b) >= 0, "SafeMath: div_ int256(b) overflow");
+        return div_(a, int256(b));
     }
 
     /**
@@ -1891,7 +1921,7 @@ contract Call is ERC20UpgradeSafe {
         return (underlying, currency, priceFloor, priceCap);
     }
     
-    function calcPrice(uint price) public view returns (uint priceCall, uint pricePut, uint totalUnd, uint totalCur, uint totalValue) {
+    function calcPrice(uint price) public view returns (int priceCall, int pricePut, uint totalUnd, uint totalCur, uint totalValue) {
         return Factory(factory).calcPrice2(price, address(this));
     }
 }
@@ -1967,7 +1997,7 @@ contract Put is ERC20UpgradeSafe {
         return (underlying, currency, priceFloor, priceCap);
     }
     
-    function calcPrice(uint price) public view returns (uint priceCall, uint pricePut, uint totalUnd, uint totalCur, uint totalValue) {
+    function calcPrice(uint price) public view returns (int priceCall, int pricePut, uint totalUnd, uint totalCur, uint totalValue) {
         return Factory(factory).calcPrice2(price, address(this));
     }
 }
@@ -2686,7 +2716,7 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         curMax = curMax.add_(Math.abs(curMax).mul(feeRate.add(slippage)).div(1e18));
     }
 
-    function calcPrice(uint price, uint priceFloor, uint priceCap, uint totalCall, uint totalPut) public pure returns (uint priceCall, uint pricePut, uint totalUnd, uint totalCur, uint totalValue) {
+    function calcPrice(uint price, uint priceFloor, uint priceCap, uint totalCall, uint totalPut) public pure returns (int priceCall, int pricePut, uint totalUnd, uint totalCur, uint totalValue) {
         //price     = (priceFloor.mul(totalCall).add(priceCap.mul(totalPut))).div(totalCall.add(totalPut));                     // V1
         //uint dp2  = priceCap.sub(priceFloor).mul(2);
         //priceCall = dp2.mul(totalPut ).div(totalCall.add(totalPut)).mul(totalPut ).div(totalCall.add(totalPut));
@@ -2695,19 +2725,21 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         //amount    = priceCall.mul(totalCall).div(1e18);
         //value     = volume.mul(price).div(1e18).add(amount);
         
+        if(totalCall == 0 && totalPut == 0)
+            return (0, 0, 0, 0, 0);
         totalUnd = Math.sqrt(totalCall.mul(totalCall).add(totalPut.mul(totalPut)));     // share totalUnd instead of t1 to avoid stack too deep errors
         totalCur = price.mul(1e18).div(Math.sqrt(priceFloor.mul(priceCap)));            // share totalCur instead of t2 to avoid stack too deep errors
-        priceCall = totalCur.mul(2).sub(uint(1e18)).mul(totalPut).div(1e18).mul(totalPut);
-        priceCall = totalCur.mul(totalCall).div(1e18).mul(totalCall).add(priceCall);
-        priceCall = priceCall.div(totalUnd).mul(totalCall).div(totalUnd).mul(priceCap.sub(priceFloor)).div(totalUnd);
-        pricePut = uint(2e18).sub(totalCur).mul(totalCall).div(1e18).mul(totalCall);
-        pricePut = totalPut.mul(totalPut).add(pricePut);
-        pricePut = pricePut.div(totalUnd).mul(totalPut).div(totalUnd).mul(priceCap.sub(priceFloor)).div(totalUnd);
+        priceCall = totalCur.mul(2).sub_(uint(1e18)).mul_(totalPut).div_(int(1e18)).mul_(totalPut);
+        priceCall = priceCall.add_(totalCur.mul(totalCall).div(1e18).mul(totalCall));
+        priceCall = priceCall.div_(totalUnd).mul_(totalCall).div_(totalUnd).mul_(priceCap.sub(priceFloor)).div_(totalUnd);
+        pricePut = uint(2e18).sub_(totalCur).mul_(totalCall).div_(int(1e18)).mul_(totalCall);
+        pricePut = pricePut.add_(totalPut.mul(totalPut));
+        pricePut = pricePut.div_(totalUnd).mul_(totalPut).div_(totalUnd).mul_(priceCap.sub(priceFloor)).div_(totalUnd);
         (totalUnd, totalCur) = calc(priceFloor, priceCap, totalCall, totalPut);
         totalValue = totalUnd.mul(price).div(1e18).add(totalCur);
     }
     
-    function calcPrice5(uint price, address underlying, address currency, uint priceFloor, uint priceCap) public view returns (uint priceCall, uint pricePut, uint totalUnd, uint totalCur, uint totalValue) {
+    function calcPrice5(uint price, address underlying, address currency, uint priceFloor, uint priceCap) public view returns (int priceCall, int pricePut, uint totalUnd, uint totalCur, uint totalValue) {
         address call = calls[underlying][currency][priceFloor][priceCap];
         address put  = puts [underlying][currency][priceFloor][priceCap];
         if(put == address(0))                                                                      // single check is sufficient
@@ -2715,7 +2747,7 @@ contract Factory is Configurable, ContextUpgradeSafe, Constants {
         return calcPrice(price, priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply());
     }
 
-    function calcPrice2(uint price, address callOrPut) public view returns (uint priceCall, uint pricePut, uint totalUnd, uint totalCur, uint totalValue) {
+    function calcPrice2(uint price, address callOrPut) public view returns (int priceCall, int pricePut, uint totalUnd, uint totalCur, uint totalValue) {
         (address underlying, address currency, uint priceFloor, uint priceCap) = Call(callOrPut).attributes();
         return calcPrice5(price, underlying, currency, priceFloor, priceCap);
     }
@@ -3148,7 +3180,7 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
         _route(amounts, path, to);
     }
     
-    function calcPrice4(address underlying, address currency, uint priceFloor, uint priceCap) public view returns (uint price, uint priceCall, uint pricePut, uint totalUnd, uint totalCur, uint totalValue) {
+    function calcPrice4(address underlying, address currency, uint priceFloor, uint priceCap) public view returns (uint price, int priceCall, int pricePut, uint totalUnd, uint totalCur, uint totalValue) {
         address call = Factory(factory).calls(underlying, currency, priceFloor, priceCap);
         address put  = Factory(factory).puts (underlying, currency, priceFloor, priceCap);
         address pair = IUniswapV2Factory(swapFactory).getPair(underlying, currency);
@@ -3160,7 +3192,7 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
         (priceCall, pricePut, totalUnd, totalCur, totalValue) = Factory(factory).calcPrice(price, priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply());
     }
 
-    function calcPrice1(address callOrPut) public view returns (uint price, uint priceCall, uint pricePut, uint totalUnd, uint totalCur, uint totalValue) {
+    function calcPrice1(address callOrPut) public view returns (uint price, int priceCall, int pricePut, uint totalUnd, uint totalCur, uint totalValue) {
         (address underlying, address currency, uint priceFloor, uint priceCap) = Call(callOrPut).attributes();
         return calcPrice4(underlying, currency, priceFloor, priceCap);
     }
