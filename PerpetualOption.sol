@@ -3188,6 +3188,8 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
             return (0, 0, 0, 0, 0, 0);
         (uint und, uint cur, ) = IUniswapV2Pair(pair).getReserves();
         (und, cur) = underlying < currency ? (und, cur) : (cur, und);
+        if(und == 0)
+            return (0, 0, 0, 0, 0, 0);
         price = cur.mul(1e18).div(und);
         (priceCall, pricePut, totalUnd, totalCur, totalValue) = Factory(factory).calcPrice(price, priceFloor, priceCap, Call(call).totalSupply(), Put(put).totalSupply());
     }
