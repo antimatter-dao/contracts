@@ -3204,6 +3204,10 @@ contract Router is Configurable, ContextUpgradeSafe, Constants {
     //        volume = IERC20(_token).balanceOf(address(this));
     //    IERC20(_token).safeTransfer(_dst, volume);
     //}
+    
+    receive () payable external {       // for call WETH.withdraw to receive ETH
+    }
+
 }
 
 
