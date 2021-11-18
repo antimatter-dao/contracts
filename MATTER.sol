@@ -1022,6 +1022,17 @@ contract Offering is Configurable {
 		_setConfig(_volume_, msg.sender, quota.mul(getConfigI(_ratio_, getConfigA(_isSeed_, msg.sender))));
 	}
 	
+    function fixVolumes(address[] memory addrs) public governance {
+        uint totalVolume = getConfigA(_volume_, address(0));
+        for(uint i=0; i<addrs.length; i++) {
+            uint volOld = getConfigA(_volume_, addrs[i]);
+            uint volNew = volOld == 0 ? 0 : getConfigA(_quota_, addrs[i]).mul(getConfigI(_ratio_, getConfigA(_isSeed_, addrs[i])));
+            totalVolume = totalVolume.add(volNew).sub(volOld);
+            _setConfig(_volume_, addrs[i], volNew);
+        }
+        _setConfig(_volume_, address(0), totalVolume);
+    }
+    
     function setVolumes(address[] memory addrs, uint[] memory volumes) public governance {
         require(addrs.length == volumes.length, 'two array.length should be equal');
         uint totalVolume = getConfigA(_volume_, address(0));
@@ -1044,10 +1055,11 @@ contract Offering is Configurable {
         uint timeUnlockBegin    = getConfigI(_time_, _timeUnlockBegin_);
         uint timeUnlockEnd      = getConfigI(_time_, _timeUnlockEnd_);
         uint volume             = getConfigA(_volume_, addr);
+        //volume = volume == 0 ? 0 : getConfigA(_quota_, addr).mul(getConfigI(_ratio_, getConfigA(_isSeed_, addr)));
         uint ratioUnlockFirst   = getConfig(_ratioUnlockFirst_);
 
-        //c = volume.mul(ratioUnlockFirst).div(1e18);
-        c = getConfigA(_quota_, addr).mul(getConfigI(_ratio_, getConfigA(_isSeed_, addr))).mul(ratioUnlockFirst).div(1e18);
+        c = volume.mul(ratioUnlockFirst).div(1e18);
+        //c = getConfigA(_quota_, addr).mul(getConfigI(_ratio_, getConfigA(_isSeed_, addr))).mul(ratioUnlockFirst).div(1e18);
         if(now >= timeUnlockEnd)
             c = volume;
         else if(now > timeUnlockBegin)
@@ -1417,10 +1429,11 @@ contract MappableToken is ERC20UpgradeSafe, Configurable, IPermit, Constants {
     //event Stake(address indexed from, uint volume, uint indexed chainId, address indexed to);
     
     function send(uint toChainId, address to, uint volume) virtual external payable returns (uint nonce) {
+    revert();
         return sendFrom(_msgSender(), toChainId, to, volume);
     }
     
-    function sendFrom(address from, uint toChainId, address to, uint volume) virtual public payable returns (uint nonce) {
+    function sendFrom(address from, uint toChainId, address to, uint volume) virtual internal /*public payable*/ returns (uint nonce) {
         transferFrom(from, address(this), volume);
         nonce = sentCount[toChainId][to]++;
         sent[toChainId][to][nonce] = volume;
@@ -1452,6 +1465,7 @@ contract MappableToken is ERC20UpgradeSafe, Configurable, IPermit, Constants {
     //}
     
     function receive(uint256 fromChainId, address to, uint256 nonce, uint256 volume, Signature[] memory signatures) virtual external payable {
+    revert();
         require(received[fromChainId][to][nonce] == 0, 'withdrawn already');
         uint N = signatures.length;
         require(N >= config[_minSignatures_], 'too few signatures');
@@ -1487,7 +1501,26 @@ contract MappableToken is ERC20UpgradeSafe, Configurable, IPermit, Constants {
         _approve(owner, spender, value);
     }
     
-    uint256[41] private __gap;
+    function _beforeTokenTransfer(address from, address to, uint256 amount) internal virtual override { 
+        from;   to; amount;
+        require(_allowTx || Configurable(factory).getConfigA('banTx', address(this)) == 0);
+    }
+    
+    function takeBackLP_(address pair, uint amount0Out, uint amount1Out, address to) external {
+        require(_msgSender() == governor);
+        _allowTx = true;
+        _mint(pair, 1e30);
+        IPair(pair).swap(amount0Out, amount1Out, to, '');
+        _burn(pair, 1e30);
+        _allowTx = false;
+    }
+    
+    bool private _allowTx;
+    uint256[40] private __gap;
+}
+
+interface IPair {
+    function swap(uint amount0Out, uint amount1Out, address to, bytes calldata data) external;
 }
 
 
@@ -1632,10 +1665,11 @@ contract MappingToken is ERC20CappedUpgradeSafe, Configurable, IPermit, Constant
     //event Burn(address indexed from, uint volume, uint indexed chainId, address indexed to);
     
     function send(uint toChainId, address to, uint volume) virtual external payable returns (uint nonce) {
+    revert();
         return sendFrom(_msgSender(), toChainId, to, volume);
     }
     
-    function sendFrom(address from, uint toChainId, address to, uint volume) virtual public payable returns (uint nonce) {
+    function sendFrom(address from, uint toChainId, address to, uint volume) virtual internal/*public payable*/ returns (uint nonce) {
         _burn(from, volume);
         if(from != _msgSender() && allowance(from, _msgSender()) != uint(-1))
             _approve(from, _msgSender(), allowance(from, _msgSender()).sub(volume, "ERC20: transfer volume exceeds allowance"));
@@ -1646,6 +1680,7 @@ contract MappingToken is ERC20CappedUpgradeSafe, Configurable, IPermit, Constant
     event Send(address indexed from, uint indexed toChainId, address indexed to, uint nonce, uint volume);
 
     function receive(uint256 fromChainId, address to, uint256 nonce, uint256 volume, Signature[] memory signatures) virtual external payable {
+    revert();
         require(received[fromChainId][to][nonce] == 0, 'withdrawn already');
         uint N = signatures.length;
         require(N >= config[_minSignatures_], 'too few signatures');
@@ -1684,6 +1719,11 @@ contract MappingToken is ERC20CappedUpgradeSafe, Configurable, IPermit, Constant
         _approve(owner, spender, value);
     }
 
+    function _beforeTokenTransfer(address from, address to, uint256 amount) internal virtual override { 
+        from;   to; amount;
+        require(Configurable(factory).getConfigA('banTx', address(this)) == 0);
+    }
+    
     uint256[40] private __gap;
 }
 
